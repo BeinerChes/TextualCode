@@ -8,7 +8,6 @@ lives in those modules; this class just orchestrates them.
 from __future__ import annotations
 
 import asyncio
-from functools import partial
 from pathlib import Path
 from typing import Iterable
 
@@ -32,6 +31,7 @@ from .config import (
 from .errors import report_error
 from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
 from .model_controller import ModelController
+from .tools_controller import ToolsController
 from .status import StatusPresenter, StatsView
 from .harvest import Harvester
 from .lessons import write_harvest
@@ -90,6 +90,7 @@ class TextualCodeApp(App):
         self._transcript = Transcript()
         self._last_context: dict | None = None
         self._model_ctl = ModelController(self)
+        self._tools_ctl = ToolsController(self)
         self._quit_armed = False  # True while the "press again" window is open
         self._quit_timer = None
         # True only while a real agent turn is in flight (submit → ResultMessage).
@@ -137,7 +138,7 @@ class TextualCodeApp(App):
         )
         self._commands.register("model", self._model_ctl.apply)
         self._commands.register("stats", self._toggle_stats_command)
-        self._commands.register("tools", self._tools_command)
+        self._commands.register("tools", self._tools_ctl.parse_command)
         self._commands.register("harvest", self._harvest_command)
         await self._conversation.add_markdown(WELCOME)
         self.query_one(PromptInput).focus()
@@ -187,48 +188,14 @@ class TextualCodeApp(App):
         """Action target for the clickable '⟳ harvest' link in the stats panel."""
         self.harvest_now()
 
-    async def _tools_command(self, arg: str) -> None:
-        """`/tools` opens the selector; `/tools on|off` enables all / none."""
-        choice = arg.strip().lower()
-        if choice == "on":
-            self._apply_tools(None)
-        elif choice == "off":
-            self._apply_tools([])
-        elif not choice:
-            self.open_tools_selector()
-        else:
-            await self._conversation.add_markdown(
-                "> Usage: `/tools` (choose) · `/tools on` · `/tools off`."
-            )
-
     def action_open_tools(self) -> None:
         """Action target for the clickable 'system tools' row in the panel."""
         self.open_tools_selector()
 
-    def _apply_tools(self, tools: list[str] | None) -> None:
-        self._project.tools = tools
-        self._project.save(self._project_dir)
-        self._agent.tools = tools
-        self.reconnect_agent()
-
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
         yield from self._model_ctl.system_commands()
-        yield SystemCommand(
-            "System tools: choose…",
-            "Pick which built-in tools are enabled",
-            self.open_tools_selector,
-        )
-        yield SystemCommand(
-            "System tools: enable all",
-            "Enable all built-in tools (reconnects the agent)",
-            partial(self._apply_tools, None),
-        )
-        yield SystemCommand(
-            "System tools: disable all",
-            "Disable all built-in tools (reconnects the agent)",
-            partial(self._apply_tools, []),
-        )
+        yield from self._tools_ctl.system_commands()
 
     # ------------------------------------------------------------- handlers --
     async def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
@@ -416,7 +383,7 @@ class TextualCodeApp(App):
             return  # cancelled
         # All selected → store None (= "all", future-proof as tools are added).
         tools = None if set(chosen) == set(BUILTIN_TOOLS) else chosen
-        self._apply_tools(tools)
+        self._tools_ctl.apply(tools)
 
     @work(exclusive=True, group=AGENT)
     async def send_to_agent(self, text: str) -> None:
