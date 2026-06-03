@@ -19,6 +19,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header
 
+from .accounting import TurnAccountant
 from .agent import AgentSession
 from .dispatcher import MessageDispatcher, TaskDebugLog
 from .commands import CommandRouter, UnknownCommand
@@ -44,7 +45,6 @@ from .screens import (
     QuestionForm,
     ToolSelector,
 )
-from .stats import UsageStats
 from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
 
 WELCOME = """\
@@ -86,13 +86,10 @@ class TextualCodeApp(App):
             tools=self._project.tools,
         )
         self._commands = CommandRouter()
-        self._stats = UsageStats()
+        self._accountant = TurnAccountant()
+        self._stats = self._accountant.stats  # alias — StatsView reads this directly
         self._transcript = Transcript()
         self._last_context: dict | None = None
-        # Σ total_tokens from Task notifications since the current turn began —
-        # the only first-class subagent signal (no cost). Fed to stats.add_turn
-        # to split spend; reset each submit. See stats.UsageStats.add_turn.
-        self._turn_subagent_tokens = 0
         self._models: list[dict] = []  # populated after connect
         self._quit_armed = False  # True while the "press again" window is open
         self._quit_timer = None
@@ -137,7 +134,7 @@ class TextualCodeApp(App):
             task_panel=self._task_panel,
             debug_log=TaskDebugLog(self._project_dir),
             on_turn_complete=self._on_turn_complete,
-            accrue_subagent_tokens=self._accrue_subagent_tokens,
+            accrue_subagent_tokens=self._accountant.accrue_subagent_tokens,
         )
         self._commands.register("model", self.switch_model)
         self._commands.register("stats", self._toggle_stats_command)
@@ -436,21 +433,18 @@ class TextualCodeApp(App):
             self._agent_turn_active = False
             await report_error(self._conversation, "Message stream error", exc)
 
-    def _accrue_subagent_tokens(self, usage: dict) -> None:
-        """Accumulate Task notification token spend for the current turn's cost split."""
-        self._turn_subagent_tokens += int((usage or {}).get("total_tokens", 0) or 0)
-
     def _on_turn_complete(self) -> None:
         self._agent_turn_active = False
         self._thinking.stop()
-        if self._renderer.last_usage is not None or self._renderer.last_cost is not None:
-            self._stats.add_turn(
-                self._renderer.last_usage,
-                self._renderer.last_cost,
-                self._renderer.last_model_usage,
-                self._renderer.main_models,
-                self._turn_subagent_tokens,
-            )
+        self._accountant.commit_turn(
+            last_usage=self._renderer.last_usage,
+            last_cost=self._renderer.last_cost,
+            last_model_usage=self._renderer.last_model_usage,
+            main_models=self._renderer.main_models,
+        )
+        self._renderer.last_usage = None
+        self._renderer.last_cost = None
+        self._renderer.last_model_usage = None
         self._status.set_phase()
         self.refresh_context()
 
@@ -492,7 +486,7 @@ class TextualCodeApp(App):
         self._renderer.last_cost = None
         self._renderer.last_usage = None
         self._renderer.last_model_usage = None
-        self._turn_subagent_tokens = 0
+        self._accountant.begin_turn()
         try:
             await self._agent.submit(text)
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
