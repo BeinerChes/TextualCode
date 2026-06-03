@@ -28,10 +28,10 @@ from .config import (
     DEFAULT_MODEL,
     ProjectConfig,
     Settings,
-    match_model,
 )
 from .errors import report_error
 from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
+from .model_controller import ModelController
 from .status import StatusPresenter, StatsView
 from .harvest import Harvester
 from .lessons import write_harvest
@@ -89,7 +89,7 @@ class TextualCodeApp(App):
         self._stats = self._accountant.stats  # alias — StatsView reads this directly
         self._transcript = Transcript()
         self._last_context: dict | None = None
-        self._models: list[dict] = []  # populated after connect
+        self._model_ctl = ModelController(self)
         self._quit_armed = False  # True while the "press again" window is open
         self._quit_timer = None
         # True only while a real agent turn is in flight (submit → ResultMessage).
@@ -135,7 +135,7 @@ class TextualCodeApp(App):
             on_turn_complete=self._on_turn_complete,
             accrue_subagent_tokens=self._accountant.accrue_subagent_tokens,
         )
-        self._commands.register("model", self.switch_model)
+        self._commands.register("model", self._model_ctl.apply)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_command)
         self._commands.register("harvest", self._harvest_command)
@@ -213,17 +213,7 @@ class TextualCodeApp(App):
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
-        yield SystemCommand(
-            "Model: choose…",
-            "Pick the agent model",
-            self.open_model_selector,
-        )
-        for model in self._models:
-            yield SystemCommand(
-                f"Model: {model.get('displayName', model['value'])}",
-                str(model.get("description", "")),
-                partial(self._switch_model_worker, str(model["value"])),
-            )
+        yield from self._model_ctl.system_commands()
         yield SystemCommand(
             "System tools: choose…",
             "Pick which built-in tools are enabled",
@@ -269,37 +259,6 @@ class TextualCodeApp(App):
             f"> 📎 Added `{name}` to the prompt — ask me to read or review it."
         )
 
-    async def switch_model(self, name: str) -> None:
-        if not self._agent.connected:
-            await self._conversation.add_markdown("> Agent not connected yet — try again in a moment.")
-            return
-        if not name:
-            self.open_model_selector()  # no arg → open the RadioSet picker
-            return
-
-        models = self._agent.available_models()
-        value = match_model(name, models)
-        try:
-            await self._agent.set_model(value)
-        except Exception as exc:  # noqa: BLE001 - report bad ids cleanly
-            await report_error(
-                self._conversation, None, exc,
-                message=f"> **Could not switch model:** {exc}",
-            )
-            return
-
-        self._model_label = value
-        self._project.model = value
-        self._project.save(self._project_dir)
-        self._status.set_phase()
-        self._stats_view.render()
-        display = next(
-            (m.get("displayName") for m in models if str(m.get("value")) == value), value
-        )
-        await self._conversation.add_markdown(
-            f"> Model → **{display}** (`{value}`) · saved."
-        )
-
     def action_open_model(self) -> None:
         """Action target for the clickable 'model' row in the stats panel."""
         self.open_model_selector()
@@ -309,7 +268,7 @@ class TextualCodeApp(App):
     async def connect_agent(self) -> None:
         try:
             await self._agent.connect()
-            self._models = self._agent.available_models()
+            self._model_ctl.refresh_models()
             self._status.set_phase()
             self.read_agent_stream()  # start reading the message stream
         except Exception as exc:  # noqa: BLE001 - surface startup failures
@@ -445,7 +404,7 @@ class TextualCodeApp(App):
             return
         chosen = await self.push_screen_wait(ModelSelector(models, self._model_label))
         if chosen is not None:
-            await self.switch_model(chosen)
+            await self._model_ctl.apply(chosen)
 
     @work(exclusive=True, group=TOOLS_UI)
     async def open_tools_selector(self) -> None:
@@ -548,7 +507,7 @@ class TextualCodeApp(App):
     @work(group=AGENT)
     async def _switch_model_worker(self, name: str) -> None:
         """Sync-callable wrapper for the command palette."""
-        await self.switch_model(name)
+        await self._model_ctl.apply(name)
 
     async def on_unmount(self) -> None:
         try:
