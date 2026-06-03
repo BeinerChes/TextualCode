@@ -32,6 +32,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [verify-api-web-search-first.md](verify-api-web-search-first.md) — Check the installed API version first, then search Anthropic's official docs (or library GitHub) scoped to that version instead of reading .venv source immediately, preventing stale or incorrect API calls due to outdated version assumptions.
 - [verify-undocumented-apis-against-source.md](verify-undocumented-apis-against-source.md) — When relying on undocumented internal APIs, verify behavior against the installed source code directly rather than public documentation, to prevent depending on unstable implementation details.
 - [dev-reviewer-workflow-for-large-refactors.md](dev-reviewer-workflow-for-large-refactors.md) — Use parameterized dev↔reviewer loops for refactors: dev implements against explicit scope, reviewer web-verifies claims and pushes back hard, then independent gate verifies imports/greps/diffs before commit; catches out-of-scope creep and drift from plan.
+- [verify-widget-apis-against-installed-source.md](verify-widget-apis-against-installed-source.md) — Before relying on a framework widget API, inspect the actual installed source code—not from memory—to confirm signatures, defaults, and behavior match your assumptions.
 
 ## SDK Configuration
 
@@ -59,12 +60,16 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [group-streaming-items-collapsibly.md](group-streaming-items-collapsibly.md) — Group consecutive streaming operations (tool calls, function invocations) into a single collapsible container with a summary header, expanding on demand, to prevent UI clutter and keep conversations scannable.
 - [css-wrapping-requires-width-constraint.md](css-wrapping-requires-width-constraint.md) — Set `text-wrap: wrap` on text widgets AND constrain their width (e.g., `width: 1fr` in flex layout, `width: <px>` in container) to force wrapping; without the width constraint, widgets size to their natural content width and clip or truncate instead of wrapping.
 - [decouple-content-render-from-selection-widget.md](decouple-content-render-from-selection-widget.md) — When a selectable widget (RadioButton, OptionList) truncates multi-line text, render content in composable Static/Label containers and manage selection separately; this allows text wrapping independent of the selection widget's constraints.
+- [use-content-markup-for-styled-widget-titles.md](use-content-markup-for-styled-widget-titles.md) — Pass styled Content objects (via Content.from_text with markup) as widget titles to render colored badges and metadata inline, rather than relying on plain string concatenation.
+- [collapsible-over-monolithic-for-grouped-content.md](collapsible-over-monolithic-for-grouped-content.md) — For grouped, hierarchical content (e.g., per-file diffs), use per-item Collapsible widgets instead of monolithic Markdown to enable independent expand/collapse and avoid re-rendering the entire view on refresh.
 
 ## Architecture
 
 - [flag-interruptible-operation-precisely.md](flag-interruptible-operation-precisely.md) — Flag the specific interruptible operation (not just the UI state) when multiple concurrent operations share a loading indicator, preventing interrupt signals from accidentally affecting unrelated work.
 - [reset-groups-at-turn-boundaries.md](reset-groups-at-turn-boundaries.md) — When grouping sequential operations in a conversation UI, reset the grouping at turn boundaries (agent text, user questions, result messages) to preserve conversational flow and logic.
 - [apply-ui-density-as-app-reactive.md](apply-ui-density-as-app-reactive.md) — Expose UI density (compact mode, margins, borders, padding) as a single reactive property on the App with a watcher that applies changes to all widgets at once; this pattern lets future Settings pages control density by simply setting `app.compact = value` without rework.
+- [isolate-subagent-sdk-clients.md](isolate-subagent-sdk-clients.md) — Create separate throwaway SDK client instances for subagent operations instead of reusing the main session client to prevent context pollution and unintended side effects.
+- [post-async-tasks-to-workers.md](post-async-tasks-to-workers.md) — Post UI requests as messages to background workers instead of calling them directly to keep the UI responsive during long-running async operations.
 
 ## QA
 
@@ -77,6 +82,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Threading
 
 - [cancel-workers-before-rebind.md](cancel-workers-before-rebind.md) — Cancel old worker groups *before* creating and binding new ones during reconnect/restart, not after; prevents old workers from reading a torn-down resource and queuing stale messages into the new pump.
+- [size-cap-and-binary-detect-content-previews.md](size-cap-and-binary-detect-content-previews.md) — When reading untracked files for preview on worker threads, cap size (64 KB / 200 lines) and detect binary content (null-byte check) to prevent UI hangs and out-of-memory crashes.
 
 ## Error Handling
 
@@ -102,3 +108,62 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 
 - [inspect-framework-source-before-tuning-css.md](inspect-framework-source-before-tuning-css.md) — When CSS properties appear dead (e.g., text-wrap: wrap on truncated widgets), inspect the underlying widget's source code for hardcoded constraints before assuming the CSS is correct; framework limitations often require architectural workarounds.
 - [verify-upgrade-path-before-rewrite.md](verify-upgrade-path-before-rewrite.md) — Before building a custom widget to replace a buggy framework control, verify the installed version is not outdated and check if upstream made it worse, not better; if so, accept that a code change is necessary.
+
+## Code Review
+
+- [diagnose-god-class-by-coupling-not-size.md](diagnose-god-class-by-coupling-not-size.md) — Diagnose God class by examining cohesion and shared mutable state between classes, not file size alone, to avoid false refactoring of loosely-coupled collections packaged in one module.
+
+## Installation Scripts
+
+- [dont-rely-on-path-in-installer-subshell.md](dont-rely-on-path-in-installer-subshell.md) — Use filesystem probes for well-known install locations in installer subshells instead of PATH-based lookup to avoid false warnings when child processes inherit the subshell's stripped environment.
+
+## User Experience
+
+- [soften-installer-warnings-about-external-tools.md](soften-installer-warnings-about-external-tools.md) — Soften installer prerequisite warnings from 'tool not found' to 'couldn't confirm — verify with tool --version' to prevent false alarms when detection is limited by the installer's execution context.
+
+## Shell / Platform Integration
+
+- [test-windows-cmd-from-bash.md](test-windows-cmd-from-bash.md) — Test Windows native executables launched from git-bash separately and account for MSYS2 path rewrites (e.g., /c → C:/) to catch silent failures in command execution or parameter passing.
+
+## Documentation / Installation
+
+- [provide-shell-specific-one-liners.md](provide-shell-specific-one-liners.md) — Provide shell-specific installer one-liners and document alias conflicts (e.g., PowerShell curl is Invoke-WebRequest with different flags) to prevent command-not-found or parameter errors.
+
+## Packaging
+
+- [explain-uv-tool-isolation-in-docs.md](explain-uv-tool-isolation-in-docs.md) — Document that `uv tool install` creates a launcher shim plus an isolated sandbox environment, not a frozen bundle, so users understand the dependency model and storage location.
+
+## UI Design
+
+- [remove-duplicate-ui-hints.md](remove-duplicate-ui-hints.md) — Remove redundant hints from welcome/splash screens if they already appear in persistent UI elements (like footer), preventing visual clutter and user confusion from repeated information.
+- [prefer-solid-block-glyphs-for-banners.md](prefer-solid-block-glyphs-for-banners.md) — Use solid block glyphs (█) instead of thin box-drawing characters (╔╦╗═╝) for ASCII art banners in TUIs, preventing rendering gaps and visual degradation across different terminal fonts.
+
+## Configuration
+
+- [pull-version-from-metadata-not-hardcoded.md](pull-version-from-metadata-not-hardcoded.md) — Reference __version__ from module metadata instead of hardcoding version strings in UI display, preventing version skew between displayed and actual package version.
+- [empty-setting-sources-for-isolated-clients.md](empty-setting-sources-for-isolated-clients.md) — Set setting_sources=[] on isolated SDK clients to prevent inherited environment configuration from conflicting with the isolated client's intended scope.
+
+## UI Threading
+
+- [textual-subprocess-threading.md](textual-subprocess-threading.md) — Always run subprocesses that may block (git, shell commands) in a Textual @work(thread=True) worker; never on the UI thread. Prevents UI stutter and unresponsiveness during long subprocess execution.
+
+## Subprocess Robustness
+
+- [git-detection-three-states.md](git-detection-three-states.md) — Before using git as a subprocess feature, detect and handle three states defensively—git not on PATH, git present but not in repo, valid repo—with graceful fallbacks for each. Prevents crashes and unusable features for users without git or in non-git directories.
+
+## UI Performance
+
+- [directorytree-skip-expensive-folders.md](directorytree-skip-expensive-folders.md) — Subclass DirectoryTree and override filter_paths to skip .git/, node_modules/, .venv/, and other expensive folders; DirectoryTree expands on-demand, and expanding these folders freezes the UI. Prevents user-triggered UI freezes on exploration.
+
+## State Management
+
+- [separate-transient-from-canonical-state.md](separate-transient-from-canonical-state.md) — Keep transient in-flight updates in a separate accumulator from committed canonical state; merge for display and discard transient at sync boundaries to prevent double-counting.
+
+## Integration
+
+- [verify-sdk-emission-timing.md](verify-sdk-emission-timing.md) — Inspect installed SDK message sources to confirm actual field-emission timing (per-step vs aggregate); design live features around observed timing, not assumptions.
+- [verify-sdk-options-from-source.md](verify-sdk-options-from-source.md) — Verify SDK option field names by inspecting the installed package source code rather than guessing to prevent runtime AttributeError from incorrect option names.
+
+## Permissions
+
+- [use-bypass-permissions-for-readonly-subagents.md](use-bypass-permissions-for-readonly-subagents.md) — Set permission_mode='bypassPermissions' on read-only subagents to allow autonomous tool use without blocking on user confirmation prompts for each operation.

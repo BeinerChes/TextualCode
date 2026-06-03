@@ -21,6 +21,7 @@ from .stats_panel import StatsPanel
 from .task_cards import TaskCard, TaskPanel
 from .thinking_bar import ThinkingBar
 from .tool_cards import ToolCard, ToolGroupCard, _format_input, tool_preview
+from .workspace_panel import WorkspacePanel
 
 __all__ = [
     "ConversationView",
@@ -29,6 +30,7 @@ __all__ = [
     "TaskCard",
     "TaskPanel",
     "ThinkingBar",
+    "WorkspacePanel",
     "ToolCard",
     "ToolGroupCard",
     "tool_preview",

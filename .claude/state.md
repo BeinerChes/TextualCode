@@ -1,39 +1,35 @@
 # Session State — 2026-06-03
 
 ## Goal
-Verify drag-and-drop file insertion works and fix long-question text truncation in AskUserDialog
+Implement functional Review and Commit buttons that spawn subagents to perform code review and generate commit messages.
 
 ## Why
-Prior session incorrectly concluded drag-drop wasn't working in Windows Terminal; AskUserDialog was truncating long option text instead of wrapping
+Review and Commit stubs exist in the codebase but lack implementation; they need real functionality to provide code review insights and automate commit creation.
 
 ## What was done
-- Verified instrumentation from prior session was in place for drag-drop testing
-- Instructed user to test file drop and Ctrl+V separately to compare event types
-- Read drop_debug.log after user dropped file; confirmed PASTE event with full file path
-- Analyzed logs showing drop and Ctrl+V both produce identical bracketed PASTE events
-- Removed all debug instrumentation (_drop_debug calls, _on_mouse_down probe) and deleted log file
-- Investigated RadioButton/ToggleButton source: found get_content_height hardcoded to 1, _make_label keeps only first line
-- Investigated SelectionList/OptionList: found wrapping causes indexing bugs, widget designed single-line-only in Textual 1.0
-- Verified installed Textual 8.2.7 is latest; confirmed framework moved in wrong direction, no upgrade path
-- Asked user for UX choice between Detail pane and Custom wrapped rows design
-- Implemented ChoiceList widget with Static-based rows that wrap, supporting single/multi-select
-- Swapped ChoiceList into QuestionForm, updated handler names and CSS
-- Added .q-choices and .choice-row styles to app.tcss
-- Wrote headless run_test() pilot verifying row height expansion, wrapping, and selection logic
-- Removed temp test file
+- Explored codebase architecture to understand dispatcher, workspace_panel, and isolated SDK client patterns (Harvester).
+- Examined SDK v0.2.88 source code to verify ClaudeAgentOptions field names and validate approach.
+- Asked user clarifying design questions about review result injection strategy and commit confirmation behavior.
+- Added render_diff_text() and commit_all() helper functions to gitinfo.py for diff rendering and staged commit.
+- Created REVIEW_PROMPT and COMMIT_PROMPT in prompts.py following the project structure.
+- Implemented Reviewer isolated SDK client with current model, Read/Grep/Glob/WebSearch tools, and permission_mode='bypassPermissions'.
+- Implemented Committer isolated SDK client with Haiku model, no tools, focused on commit message generation.
+- Created workspace_controller.py to orchestrate both review and commit workflows.
+- Updated workspace_panel.py to post ReviewRequested and CommitRequested messages instead of calling notify stubs.
+- Added REVIEW and COMMIT worker group constants to groups.py.
+- Wired controller into app.py with message handlers and @work shim workers.
+- Verified imports and git logic with smoke tests; confirmed existing tests still pass.
 
 ## Mistakes / corrections
-- Prior session's diagnosis (drag-drop broken due to terminal limitation) was disproven by instrumented log showing PASTE event
-- Earlier CSS fix (text-wrap: wrap on RadioButton) was dead code; widget is structurally limited to one line
-- First attempt to write test used PowerShell heredoc syntax (doesn't work); rewrote to temp file instead
+- _(none)_
 
 ## Result
-Drag-and-drop confirmed working: Windows Terminal converts drops to bracketed PASTE events, already handled by _on_paste. Long-text truncation in AskUserDialog fixed: new ChoiceList widget with Static rows replaces RadioSet, verified to wrap and select correctly. Debug instrumentation cleaned up.  _(satisfied: yes)_
+Both Review and Commit buttons now functional: Review uses isolated current-model subagent with tools to autonomously examine diff and search best practices, injecting findings into main agent's context without auto-editing; Commit uses isolated Haiku subagent to draft Conventional-Commits message, stages all changes (git add -A), and commits immediately. Changes span 8 files: 5 modified (gitinfo.py, prompts.py, workspace_panel.py, app.py, groups.py) and 3 new modules (reviewer.py, committer.py, workspace_controller.py).  _(satisfied: yes)_
 
 ## Next
-- User should run app visually to confirm AskUserDialog wrapping in their terminal
-- Consider applying ChoiceList to ModelSelector which also uses RadioSet and has same truncation risk
+- Live TUI smoke test with a real git diff to verify async behavior and git edge case handling.
+- Monitor subagent behavior and tool costs in production usage patterns.
 
 ## Map
-- **keywords:** drag-and-drop, paste event, windows terminal, textual, radiobutton, selectionlist, wrapping, truncation, choicelist, static widget, get_content_height, text-wrap, keyboard input, mouse selection, focusable
-- **keyfiles:** textualcode/widgets.py, textualcode/screens.py, textualcode/app.tcss
+- **keywords:** isolated sdk client, subagent, code review, websearch, commit message, diff rendering, git add, conventional commits, permission_mode, bypassPermissions, asyncio.to_thread, worker groups, message handlers, setting_sources, harvester pattern, claude agent sdk
+- **keyfiles:** gitinfo.py, prompts.py, reviewer.py, committer.py, workspace_controller.py, workspace_panel.py, app.py, groups.py

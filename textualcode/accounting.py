@@ -30,19 +30,49 @@ class TurnAccountant:
        ResultMessage for the same turn cannot accidentally bill it.
     """
 
+    # Anthropic ``usage`` block keys summed for the live (in-flight turn) preview.
+    _LIVE_KEYS = (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    )
+
     def __init__(self) -> None:
         self._stats = UsageStats()
         self._turn_subagent_tokens = 0
         self._committed = False
+        # Summed per-step usage for the current turn — display-only, discarded on
+        # commit in favour of the authoritative ResultMessage total.
+        self._live_usage: dict[str, int] = {}
 
     @property
     def stats(self) -> UsageStats:
         return self._stats
 
+    @property
+    def display_stats(self) -> UsageStats:
+        """Committed stats with the in-flight turn's live tokens overlaid.
+
+        Equals ``stats`` when no turn is in flight (``_live_usage`` empty), so
+        every caller of the stats panel can use this unconditionally.
+        """
+        return self._stats.merged_with(self._live_usage)
+
     def begin_turn(self) -> None:
-        """Reset the subagent-token accumulator and committed flag at turn start."""
+        """Reset the per-turn accumulators and committed flag at turn start."""
         self._turn_subagent_tokens = 0
         self._committed = False
+        self._live_usage = {}
+
+    def accrue_live_usage(self, usage: dict | None) -> None:
+        """Add one streamed assistant step's usage to the live turn preview."""
+        if not usage:
+            return
+        for key in self._LIVE_KEYS:
+            value = usage.get(key)
+            if value:
+                self._live_usage[key] = self._live_usage.get(key, 0) + int(value)
 
     def accrue_subagent_tokens(self, usage: dict | None) -> None:
         """Accumulate Task notification token spend for the current turn's cost split."""
@@ -76,6 +106,9 @@ class TurnAccountant:
         if self._committed:
             return
         self._committed = True
+        # Discard the live preview — from here the authoritative ResultMessage
+        # usage (added below) is the source of truth for this turn.
+        self._live_usage = {}
         # Null-data guard: skip add_turn (and the turns counter) for interrupted
         # or error turns that carry neither usage nor cost data.
         if last_usage is None and last_cost is None:

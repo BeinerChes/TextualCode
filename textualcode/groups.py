@@ -29,3 +29,14 @@ STATS = "stats"
 
 # Modal selectors (model picker, tools picker) — one open at a time.
 TOOLS_UI = "tools-ui"
+
+# Workspace panel diff refresh — one git subprocess at a time; a new toggle/
+# refresh cancels an in-flight one so the panel never shows stale work.
+WORKSPACE = "workspace"
+
+# Workspace Review action — isolated review subagent, kept off the agent-turn
+# group so it doesn't cancel (or get cancelled by) a normal turn.
+REVIEW = "review"
+
+# Workspace Commit action — isolated Haiku draft + git commit subprocess.
+COMMIT = "commit"

@@ -8,7 +8,7 @@ totals. The headline metric is the cache hit rate (read / total input).
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # The CLI tags model_usage keys with the context-window tier, e.g.
 # "claude-opus-4-8[1m]", while AssistantMessage.model reports the bare id
@@ -136,6 +136,28 @@ class UsageStats:
         if cost:
             turn_sub_cost = min(turn_sub_cost, _float(cost))
         self.subagent_cost_usd += turn_sub_cost
+
+    def merged_with(self, live: dict | None) -> "UsageStats":
+        """Return a display-only copy with an in-flight turn's token usage added.
+
+        ``live`` is a partial usage dict (Anthropic ``usage`` block keys) summed
+        from the current turn's streamed assistant steps. Used to show tokens /
+        cache hit rate updating in real time *before* the authoritative
+        ``ResultMessage`` arrives. turns and cost are left untouched (no
+        per-step cost is available); they update on commit. Returns ``self``
+        unchanged when there is nothing live to overlay.
+        """
+        if not live:
+            return self
+        return replace(
+            self,
+            input_tokens=self.input_tokens + _int(live.get("input_tokens")),
+            output_tokens=self.output_tokens + _int(live.get("output_tokens")),
+            cache_creation_tokens=self.cache_creation_tokens
+            + _int(live.get("cache_creation_input_tokens")),
+            cache_read_tokens=self.cache_read_tokens
+            + _int(live.get("cache_read_input_tokens")),
+        )
 
     @property
     def main_cost_usd(self) -> float:
