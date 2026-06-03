@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rich.console import Group
+from rich.markup import escape
 from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
@@ -72,12 +73,25 @@ class StatsPanel(Static):
             f" [{color}]{'█' * filled}[/][grey30]{'█' * empty}[/grey30]"
         )
 
+    @staticmethod
+    def _mcp_status_color(status: str) -> str:
+        """Colour an MCP server's connection status."""
+        return {
+            "connected": "green",
+            "pending": "yellow",
+            "needs-auth": "yellow",
+            "failed": "red",
+            "disabled": "grey50",
+        }.get(status, "grey50")
+
     def show(
         self,
         stats: UsageStats,
         model: str,
         context: dict | None = None,
         effort: str = "default",
+        mcp: list[dict] | None = None,
+        mcp_enabled: bool = False,
     ) -> None:
         rate = stats.cache_hit_rate
         rcolor = self._rate_color(rate)
@@ -120,7 +134,36 @@ class StatsPanel(Static):
         ]
         if context:
             parts.extend(self._context_parts(context))
+        parts.extend(self._mcp_parts(mcp or [], mcp_enabled))
         self.update(Group(*parts))
+
+    def _mcp_parts(self, mcp: list[dict], enabled: bool) -> list:
+        """A clickable 'mcp' section.
+
+        When MCP is off for the project, shows a single 'off — enable' link.
+        When on, lists each server (name → status). Every cell opens the
+        selector (see App.action_open_mcp), matching the clickable
+        'system tools' / '⟳ harvest' rows.
+        """
+        def _link(text: str) -> Text:
+            cell = Text(text, style=Style(meta={"@click": "app.open_mcp"}), overflow="ellipsis")
+            cell.stylize("underline")
+            return cell
+
+        grid = self._grid()
+        if not enabled:
+            grid.add_row(_link("off — enable"), "")
+        elif not mcp:
+            grid.add_row(_link("on — no servers"), "")
+        else:
+            for server in mcp:
+                name = str(server.get("name", ""))
+                status = str(server.get("status", ""))
+                color = self._mcp_status_color(status)
+                # status is a fixed Literal today, but escape for defense in
+                # depth (color is a trusted constant).
+                grid.add_row(_link(name), f"[{color}]{escape(status)}[/]")
+        return [self._rule("[b]mcp[/b]"), grid]
 
     def _context_parts(self, context: dict) -> list:
         total = context.get("totalTokens", 0)

@@ -38,6 +38,7 @@ class SessionController:
         self._app.workers.cancel_group(self._app, PUMP)   # sdk-03: stop the old pump before tearing down its client
         await self._app._agent.reconnect()
         self._app.read_agent_stream()
+        self._app.refresh_mcp()  # re-read MCP server statuses for the new client
 
     # ------------------------------------------------------------- lifecycle --
 
@@ -48,6 +49,7 @@ class SessionController:
             self._app._model_ctl.refresh_models()
             self._app._status.set_phase()
             self._app.read_agent_stream()  # start reading the message stream
+            self._app.refresh_mcp()  # populate MCP server statuses in the panel
         except Exception as exc:  # noqa: BLE001 - surface startup failures
             self._app._status.set_phase("offline")
             await report_error(

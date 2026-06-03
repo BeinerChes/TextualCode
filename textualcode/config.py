@@ -6,7 +6,7 @@ Pure data and helpers — no I/O, no Textual, no SDK calls.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 # Per-project settings file, written in the directory the app is launched from.
@@ -124,6 +124,16 @@ class ProjectConfig:
     model: str = "default"               # alias or raw id; "default" = SDK default
     tools: list[str] | None = None       # None = all built-ins; [] = none; subset = list
     effort: str = DEFAULT_EFFORT         # one of EFFORT_VALUES; "default" = unset
+    # Per-project MCP trust gate. False (the default) keeps strict_mcp_config on
+    # so NO ambient MCP server is loaded/spawned at connect — the security
+    # boundary. Loading project `.mcp.json` (or user) stdio servers spawns their
+    # `command` as a subprocess at connect, BEFORE any tool-permission gate, so
+    # this must be opt-in per project (the user enables it explicitly).
+    mcp_enabled: bool = False
+    # Once MCP is enabled, individual servers the user has turned OFF (by name).
+    # A preference, not a security boundary: a disabled server still spawns at
+    # connect and is then turned off via the SDK's runtime toggle_mcp_server.
+    disabled_mcp_servers: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, directory: Path) -> "ProjectConfig":
@@ -136,7 +146,17 @@ class ProjectConfig:
             model=str(data.get("model", "default")),
             tools=cls._read_tools(data),
             effort=cls._read_effort(data),
+            mcp_enabled=bool(data.get("mcp_enabled", False)),
+            disabled_mcp_servers=cls._read_disabled_mcp(data),
         )
+
+    @staticmethod
+    def _read_disabled_mcp(data: dict) -> list[str]:
+        """A list of server-name strings; ignore anything malformed."""
+        value = data.get("disabled_mcp_servers", [])
+        if isinstance(value, list):
+            return [str(v) for v in value]
+        return []
 
     @staticmethod
     def _read_effort(data: dict) -> str:

@@ -38,6 +38,8 @@ class AgentSession:
         model: str | None = None,
         tools: list[str] | None = None,
         effort: str | None = None,
+        mcp_enabled: bool = False,
+        disabled_mcp: list[str] | None = None,
     ) -> None:
         self._settings = settings
         self._permission_handler = permission_handler
@@ -48,6 +50,12 @@ class AgentSession:
         self.model = model      # CLI value ("sonnet"/"haiku"/"default"/raw id) or None
         self.tools = tools      # None = all built-ins; [] = none; subset = list
         self.effort = effort    # EffortLevel str, or "default"/None = let model decide
+        # Per-project MCP trust gate. False → strict_mcp_config on → no ambient
+        # MCP servers are loaded/spawned at connect (safe default).
+        self.mcp_enabled = mcp_enabled
+        # Server names the user has turned off (persisted intent); re-applied
+        # after every connect via toggle_mcp_server (see _apply_disabled_mcp).
+        self.disabled_mcp: set[str] = set(disabled_mcp or [])
 
     @property
     def connected(self) -> bool:
@@ -64,7 +72,14 @@ class AgentSession:
             effort=self._normalize_effort(self.effort),
             # None = full built-in set; [] = none; [names] = exactly those.
             tools=self.tools,
-            strict_mcp_config=True,  # don't pull in ambient project/global MCP servers
+            # Trust gate: strict (no ambient MCP) UNTIL the user enables MCP for
+            # this project. With strict off, the CLI loads project `.mcp.json` +
+            # user/global servers (setting_sources below makes them visible) and
+            # SPAWNS stdio servers as subprocesses at connect — before any tool
+            # gate — so loading is opt-in per project. Once enabled, individual
+            # servers are turned off after connect (see _apply_disabled_mcp). The
+            # isolated subagents (committer/reviewer/harvest) stay strict.
+            strict_mcp_config=not self.mcp_enabled,
             # "user" + "project" load global + project settings — REQUIRED for the
             # SDK to inject CLAUDE.md as memory. Per the SDK's "what subagents
             # inherit" table, subagents pick up Project CLAUDE.md from this same
@@ -80,6 +95,7 @@ class AgentSession:
         self._client = client
         info = await client.get_server_info()
         self._models = list(info.get("models", [])) if info else []
+        await self._apply_disabled_mcp()
 
     @staticmethod
     def _normalize_model(model: str | None) -> str | None:
@@ -137,6 +153,54 @@ class AgentSession:
             return await self._client.get_context_usage()
         except Exception:  # noqa: BLE001 - degrade gracefully if unsupported
             return None
+
+    async def mcp_status(self) -> list[dict]:
+        """Live status of every configured MCP server.
+
+        Each entry has name / status (connected|pending|failed|needs-auth|
+        disabled) / scope / tools / config. Empty list when not connected or if
+        the CLI doesn't support the query. Verified against claude-agent-sdk
+        ==0.2.88 (client.get_mcp_status -> {"mcpServers": [...]}).
+        """
+        if self._client is None:
+            return []
+        try:
+            result = await self._client.get_mcp_status()
+        except Exception:  # noqa: BLE001 - degrade gracefully if unsupported
+            return []
+        return list(result.get("mcpServers", [])) if result else []
+
+    async def set_mcp_enabled(self, name: str, enabled: bool) -> None:
+        """Enable/disable one MCP server live (no reconnect) and remember it.
+
+        The SDK's toggle_mcp_server connects/disconnects the server and adds/
+        removes its tools at runtime. We update `disabled_mcp` only after the
+        toggle succeeds so persisted state matches reality; when offline we just
+        record the intent for the next connect.
+        """
+        if self._client is not None:
+            await self._client.toggle_mcp_server(name, enabled)
+        if enabled:
+            self.disabled_mcp.discard(name)
+        else:
+            self.disabled_mcp.add(name)
+
+    async def _apply_disabled_mcp(self) -> None:
+        """After connect, turn off every server the user has disabled.
+
+        Toggles every name in `disabled_mcp` unconditionally (wrapped per-name)
+        rather than only those already present in the status list: a slow stdio
+        server may not have registered by the time we query, and we still want
+        it off when it appears. An unknown/already-off name just no-ops or errors
+        harmlessly.
+        """
+        if not self.mcp_enabled or not self.disabled_mcp or self._client is None:
+            return
+        for name in sorted(self.disabled_mcp):
+            try:
+                await self._client.toggle_mcp_server(name, False)
+            except Exception:  # noqa: BLE001 - best effort; ignore unknown/failed names
+                pass
 
     async def aclose(self) -> None:
         if self._client is not None:

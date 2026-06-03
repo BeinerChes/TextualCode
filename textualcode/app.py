@@ -10,7 +10,8 @@ The collaborators:
 - ``TurnAccountant`` — per-turn cost/usage accounting.
 - ``StatusPresenter`` / ``StatsView`` — the status line and stats panel.
 - ``ModalBridge`` — SDK permission/question dialogs.
-- ``ModelController`` / ``ToolsController`` — model + built-in-tools features.
+- ``ModelController`` / ``ToolsController`` / ``McpController`` — model,
+  built-in-tools, and MCP-server features.
 - ``HarvestController`` / ``QuitGuard`` — harvest flow and two-step quit.
 - ``CommandRouter`` — slash commands.
 """
@@ -48,6 +49,7 @@ from .groups import (
     CONNECT,
     HARVEST,
     INTERRUPT,
+    MCP,
     PUMP,
     REVIEW,
     STATS,
@@ -55,6 +57,7 @@ from .groups import (
 )
 from .effort_controller import EffortController
 from .harvest_controller import HarvestController
+from .mcp_controller import McpController
 from .model_controller import ModelController
 from .session_controller import SessionController
 from .tools_controller import ToolsController
@@ -65,7 +68,9 @@ from .modal_bridge import ModalBridge
 from .renderer import MessageRenderer
 from .transcript import Transcript
 from .screens import (
+    ConfirmDialog,
     EffortSelector,
+    McpSelector,
     ModelSelector,
     ToolSelector,
 )
@@ -87,13 +92,6 @@ WELCOME = f"""\
    ██║   ╚██████╗╚██████╔╝██████╔╝███████╗
    ╚═╝    ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝  v{__version__}
 ```
-
-Powered by the **Claude Agent SDK** — uses your Claude Code login (Pro/Max or `ANTHROPIC_API_KEY`).
-
-- Tool calls prompt an **approve/deny** dialog (a / d).
-- `/model` pick model · `/effort` reasoning effort · `/tools` pick tools · `/stats` panel · `/harvest` map session
-- Click **model**, **effort**, or **system tools** in the stats panel to change them.
-- Settings persist per project in `.textualcode.json`.
 """
 
 
@@ -127,15 +125,19 @@ class TextualCodeApp(App):
             model=self._project.model,
             tools=self._project.tools,
             effort=self._project.effort,
+            mcp_enabled=self._project.mcp_enabled,
+            disabled_mcp=self._project.disabled_mcp_servers,
         )
         self._commands = CommandRouter()
         self._accountant = TurnAccountant()
         self._stats = self._accountant.stats  # alias — StatsView reads this directly
         self._transcript = Transcript()
         self._last_context: dict | None = None
+        self._last_mcp: list[dict] = []  # live MCP server statuses for the panel
         self._model_ctl = ModelController(self)
         self._effort_ctl = EffortController(self)
         self._tools_ctl = ToolsController(self)
+        self._mcp_ctl = McpController(self)
         self._harvest_ctl = HarvestController(self)
         self._workspace_ctl = WorkspaceController(self)
         self._session = SessionController(self)
@@ -190,6 +192,7 @@ class TextualCodeApp(App):
         self._commands.register("effort", self._effort_ctl.parse_command)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_ctl.parse_command)
+        self._commands.register("mcp", self._mcp_ctl.parse_command)
         self._commands.register("harvest", self._harvest_command)
         self._apply_compact(self.compact)
         await self._conversation.add_markdown(WELCOME)
@@ -280,11 +283,16 @@ class TextualCodeApp(App):
         """Action target for the clickable 'system tools' row in the panel."""
         self.open_tools_selector()
 
+    def action_open_mcp(self) -> None:
+        """Action target for the clickable 'mcp' rows in the stats panel."""
+        self.open_mcp_selector()
+
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
         yield from self._model_ctl.system_commands()
         yield from self._effort_ctl.system_commands()
         yield from self._tools_ctl.system_commands()
+        yield from self._mcp_ctl.system_commands()
 
     # ------------------------------------------------------------- handlers --
     async def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
@@ -415,6 +423,12 @@ class TextualCodeApp(App):
         self._last_context = await self._agent.context_usage()
         self._stats_view.render()
 
+    @work(exclusive=True, group=MCP)
+    async def refresh_mcp(self) -> None:
+        """Re-read live MCP server statuses into the stats panel."""
+        self._last_mcp = await self._agent.mcp_status()
+        self._stats_view.render()
+
     @work(exclusive=True, group=TOOLS_UI)
     async def open_model_selector(self) -> None:
         """Open the RadioSet model picker and apply the choice."""
@@ -448,6 +462,42 @@ class TextualCodeApp(App):
         # All selected → store None (= "all", future-proof as tools are added).
         tools = None if set(chosen) == set(BUILTIN_TOOLS) else chosen
         self._tools_ctl.apply(tools)
+
+    @work(exclusive=True, group=TOOLS_UI)
+    async def open_mcp_selector(self) -> None:
+        """Open the MCP UI.
+
+        When MCP is off for this project, first confirm the trust gate (loading
+        ambient servers spawns subprocesses). When on, show the per-server
+        selector and apply the chosen on/off set live.
+        """
+        if not self._agent.connected:
+            await self._conversation.add_markdown(
+                "> Agent not connected yet — try again in a moment."
+            )
+            return
+        if not self._agent.mcp_enabled:
+            ok = await self.push_screen_wait(
+                ConfirmDialog(
+                    "🔌 Enable MCP for this project?",
+                    "This loads and RUNS MCP servers from your user settings and "
+                    "this project's .mcp.json (stdio servers start as local "
+                    "subprocesses). Only enable for projects you trust. The agent "
+                    "reconnects, resetting the conversation.",
+                    confirm_label="Enable (y)",
+                    cancel_label="Cancel (n)",
+                )
+            )
+            if ok:
+                await self._mcp_ctl.set_project_enabled(True)
+            return
+        servers = await self._agent.mcp_status()
+        self._last_mcp = servers
+        self._stats_view.render()
+        chosen = await self.push_screen_wait(McpSelector(servers))
+        if chosen is None:
+            return  # cancelled
+        await self._mcp_ctl.apply(chosen, servers)
 
     @work(exclusive=True, group=AGENT)
     async def send_to_agent(self, text: str) -> None:
@@ -512,6 +562,16 @@ class TextualCodeApp(App):
     async def _switch_effort_worker(self, level: str) -> None:
         """Sync-callable wrapper for the command palette."""
         await self._effort_ctl.apply(level)
+
+    @work(group=AGENT)
+    async def _mcp_enable_worker(self) -> None:
+        """Sync-callable wrapper for the command palette (enable MCP)."""
+        await self._mcp_ctl.set_project_enabled(True)
+
+    @work(group=AGENT)
+    async def _mcp_disable_worker(self) -> None:
+        """Sync-callable wrapper for the command palette (disable MCP)."""
+        await self._mcp_ctl.set_project_enabled(False)
 
     async def on_unmount(self) -> None:
         try:

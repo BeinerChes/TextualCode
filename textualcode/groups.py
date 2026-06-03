@@ -27,6 +27,10 @@ HARVEST = "harvest"
 # Stats / context-usage refresh.
 STATS = "stats"
 
+# MCP server-status refresh — its own group so polling MCP status never cancels
+# (or is cancelled by) the context-usage refresh in STATS.
+MCP = "mcp"
+
 # Modal selectors (model picker, tools picker) — one open at a time.
 TOOLS_UI = "tools-ui"
 

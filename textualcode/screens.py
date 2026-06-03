@@ -286,6 +286,82 @@ class ToolSelector(ModalScreen[list[str] | None]):
         self.dismiss(None)
 
 
+class McpSelector(ModalScreen[list[str] | None]):
+    """Pick which MCP servers are enabled. Dismisses with the enabled name list,
+    or None if cancelled."""
+
+    BINDINGS = [
+        ("s", "save", "Save"),
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, servers: list[dict]) -> None:
+        super().__init__()
+        self._servers = servers
+
+    @staticmethod
+    def _label(server: dict) -> str:
+        """`name (status · scope · N tools)` — purely informational suffix."""
+        name = escape(str(server.get("name", "")))
+        bits: list[str] = []
+        status = str(server.get("status", "")).strip()
+        scope = str(server.get("scope", "")).strip()
+        tools = server.get("tools")
+        if status:
+            bits.append(status)
+        if scope:
+            bits.append(scope)
+        if isinstance(tools, list) and tools:
+            bits.append(f"{len(tools)} tools")
+        return f"{name} ({escape(' · '.join(bits))})" if bits else name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(
+                "🔌 [b]MCP servers[/b] — Space toggles · Save (s) applies",
+                id="dlg-title",
+            )
+            if not self._servers:
+                yield Static(
+                    "[dim]No MCP servers found in this project's `.mcp.json` or "
+                    "your user settings.[/dim]",
+                    id="dlg-body",
+                )
+            else:
+                yield SelectionList[str](
+                    *[
+                        Selection(
+                            self._label(server),
+                            str(server.get("name", "")),
+                            # Initial check state from LIVE status, not a cached
+                            # wishlist — a server reporting "disabled" is off.
+                            server.get("status") != "disabled",
+                        )
+                        for server in self._servers
+                    ],
+                    id="mcp-list",
+                    compact=bool(getattr(self.app, "compact", False)),
+                )
+            with Horizontal(id="dlg-buttons"):
+                yield Button("Save (s)", variant="success", id="save")
+                yield Button("Cancel", variant="default", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save":
+            self.action_save()
+        else:
+            self.dismiss(None)
+
+    def action_save(self) -> None:
+        if not self._servers:
+            self.dismiss([])  # nothing to choose — treat as a no-op save
+            return
+        self.dismiss(list(self.query_one(SelectionList).selected))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class QuestionForm(ModalScreen[dict | None]):
     """Render an `AskUserQuestion` tool call as an interactive form.
 

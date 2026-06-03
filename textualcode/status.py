@@ -70,4 +70,6 @@ class StatsView:
             self._app._model_label,
             self._app._last_context,
             self._app._effort_label,
+            self._app._last_mcp,
+            self._app._agent.mcp_enabled,
         )
