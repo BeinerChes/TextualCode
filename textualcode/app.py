@@ -8,18 +8,11 @@ lives in those modules; this class just orchestrates them.
 from __future__ import annotations
 
 import asyncio
-import os
 from functools import partial
 from pathlib import Path
 from typing import Iterable
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ResultMessage,
-    TaskNotificationMessage,
-    TaskProgressMessage,
-    TaskStartedMessage,
-)
+import anyio
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
@@ -27,6 +20,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header
 
 from .agent import AgentSession
+from .dispatcher import MessageDispatcher, TaskDebugLog
 from .commands import CommandRouter, UnknownCommand
 from .config import (
     BUILTIN_TOOLS,
@@ -65,16 +59,6 @@ Powered by the **Claude Agent SDK**. Type a message and press **Enter**.
 - Settings persist per project in `.textualcode.json`.
 - Press **Ctrl+C** to quit.
 """
-
-
-def _task_key(message) -> str:
-    """Card key for a start/progress message: task_id + description.
-
-    Workflows share one task_id but vary the description per sub-agent (the
-    agent's label), so this gives one card per sub-agent. Real tasks have a
-    unique task_id and a stable description → one card.
-    """
-    return f"{getattr(message, 'task_id', '?')}:{getattr(message, 'description', '') or ''}"
 
 
 class TextualCodeApp(App):
@@ -147,6 +131,14 @@ class TextualCodeApp(App):
         self._thinking = self.query_one(ThinkingBar)
         self._stats_view.render()
         self._renderer = MessageRenderer(self._conversation, self._settings)
+        self._dispatcher = MessageDispatcher(
+            renderer=self._renderer,
+            transcript=self._transcript,
+            task_panel=self._task_panel,
+            debug_log=TaskDebugLog(self._project_dir),
+            on_turn_complete=self._on_turn_complete,
+            accrue_subagent_tokens=self._accrue_subagent_tokens,
+        )
         self._commands.register("model", self.switch_model)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_command)
@@ -354,7 +346,7 @@ class TextualCodeApp(App):
             await self._agent.connect()
             self._models = self._agent.available_models()
             self._status.set_phase()
-            self.message_pump()  # start reading the message stream
+            self.read_agent_stream()  # start reading the message stream
         except Exception as exc:  # noqa: BLE001 - surface startup failures
             self._status.set_phase("offline")
             await report_error(
@@ -372,7 +364,7 @@ class TextualCodeApp(App):
         self._status.set_phase("reconnecting…")
         try:
             await self._agent.reconnect()
-            self.message_pump()  # rebind the pump to the new client
+            self.read_agent_stream()  # rebind the pump to the new client
             self._status.set_phase()
             await self._conversation.add_markdown(
                 f"> ↻ Reconnected · system tools: **{desc}** "
@@ -393,7 +385,7 @@ class TextualCodeApp(App):
         self._status.set_phase("restarting…")
         try:
             await self._agent.reconnect()  # disconnect + connect = empty context
-            self.message_pump()            # rebind the pump to the new client
+            self.read_agent_stream()       # rebind the pump to the new client
             self._transcript.clear()
             self._last_context = None
             self._stats_view.render()
@@ -407,58 +399,46 @@ class TextualCodeApp(App):
             await report_error(self._conversation, "Restart failed:", exc)
 
     @work(exclusive=True, group=PUMP)
-    async def message_pump(self) -> None:
+    async def read_agent_stream(self) -> None:
         """Single long-lived reader of the SDK message stream.
 
         Routes conversation messages to the renderer and Task* lifecycle
         messages to the task panel — so background work is shown even between
         turns. exclusive+group means reconnect cancels the old pump.
+
+        Bug #3 fix: dispatch errors are caught per-message (inner try) so they
+        surface to the user and reset the turn UI, but the pump loop survives.
+        The outer try catches only expected stream-termination: re-raises
+        CancelledError (worker cancellation) and swallows anyio.ClosedResourceError
+        (stream closed on disconnect/reconnect). Verified against installed
+        claude-agent-sdk v0.2.88 source (_internal/query.py, client.py) — the
+        receive_messages() path wraps anyio memory streams; ClosedResourceError is
+        the exception class anyio raises when a stream is closed mid-iteration.
         """
         try:
             async for message in self._agent.messages():
-                await self._dispatch(message)
-        except Exception:  # noqa: BLE001 - stream ends on disconnect/reconnect
-            pass
+                try:
+                    await self._dispatcher.handle(message)
+                except Exception as exc:  # noqa: BLE001 - dispatch error: report and continue
+                    await report_error(self._conversation, "Render error", exc)
+                    self._thinking.stop()
+                    self._agent_turn_active = False
+        except asyncio.CancelledError:
+            raise  # never swallow worker cancellation
+        except anyio.ClosedResourceError:
+            pass  # stream closed on disconnect/reconnect — expected termination
+        except Exception as exc:  # noqa: BLE001 - unexpected stream error: surface, don't crash the app
+            # Narrowing the catch (bug #3) means an unforeseen stream-level error
+            # would otherwise escape the worker and, under @work's default
+            # exit_on_error=True, kill the whole app. Surface it and end the pump
+            # gracefully instead (a reconnect can restart the stream).
+            self._thinking.stop()
+            self._agent_turn_active = False
+            await report_error(self._conversation, "Message stream error", exc)
 
-    async def _dispatch(self, message) -> None:
-        if isinstance(message, TaskStartedMessage):
-            self._log_task(message)
-            await self._task_panel.start(_task_key(message), message.description)
-            return
-        if isinstance(message, TaskProgressMessage):
-            self._log_task(message)
-            await self._task_panel.progress(_task_key(message), message.description, message.usage)
-            return
-        if isinstance(message, TaskNotificationMessage):
-            self._log_task(message)
-            # Accumulate the subagent's token spend for this turn's cost split.
-            if message.usage:
-                self._turn_subagent_tokens += int(message.usage.get("total_tokens", 0) or 0)
-            # One notification ends the whole task → finish every card under it.
-            await self._task_panel.finish_task(message.task_id, message.status, message.summary)
-            return
-        if isinstance(message, AssistantMessage):
-            self._transcript.add_assistant(message)
-        await self._renderer.render(message)
-        if isinstance(message, ResultMessage):
-            self._on_turn_complete()
-
-    def _log_task(self, message) -> None:
-        """Append raw Task* fields to a debug log when TEXTUALCODE_DEBUG_TASKS is set."""
-        if not os.environ.get("TEXTUALCODE_DEBUG_TASKS"):
-            return
-        try:
-            line = (
-                f"{type(message).__name__} "
-                f"task_id={getattr(message, 'task_id', '?')} "
-                f"tool_use_id={getattr(message, 'tool_use_id', '')} "
-                f"usage={getattr(message, 'usage', None)} "
-                f"desc={getattr(message, 'description', getattr(message, 'summary', ''))!r}\n"
-            )
-            with (self._project_dir / "task-debug.log").open("a", encoding="utf-8") as fh:
-                fh.write(line)
-        except Exception:  # noqa: BLE001 - logging must never break the pump
-            pass
+    def _accrue_subagent_tokens(self, usage: dict) -> None:
+        """Accumulate Task notification token spend for the current turn's cost split."""
+        self._turn_subagent_tokens += int((usage or {}).get("total_tokens", 0) or 0)
 
     def _on_turn_complete(self) -> None:
         self._agent_turn_active = False
