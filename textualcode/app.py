@@ -354,14 +354,28 @@ class TextualCodeApp(App):
                 ),
             )
 
+    def _abandon_turn(self) -> None:
+        """Reset turn UI when a reconnect/restart abandons an in-flight turn (bug #1)."""
+        self._agent_turn_active = False
+        self._thinking.stop()
+        self._renderer.last_usage = None
+        self._renderer.last_cost = None
+        self._renderer.last_model_usage = None
+
+    async def _reconnect_and_rebind(self) -> None:
+        """Abandon any in-flight turn, cancel the old pump, reconnect, start a fresh pump."""
+        self._abandon_turn()
+        self.workers.cancel_group(self, PUMP)   # sdk-03: stop the old pump before tearing down its client
+        await self._agent.reconnect()
+        self.read_agent_stream()
+
     @work(exclusive=True, group=CONNECT)
     async def reconnect_agent(self) -> None:
         tools = self._agent.tools
         desc = "all" if tools is None else ("none" if not tools else f"{len(tools)} selected")
         self._status.set_phase("reconnecting…")
         try:
-            await self._agent.reconnect()
-            self.read_agent_stream()  # rebind the pump to the new client
+            await self._reconnect_and_rebind()
             self._status.set_phase()
             await self._conversation.add_markdown(
                 f"> ↻ Reconnected · system tools: **{desc}** "
@@ -381,8 +395,7 @@ class TextualCodeApp(App):
         """
         self._status.set_phase("restarting…")
         try:
-            await self._agent.reconnect()  # disconnect + connect = empty context
-            self.read_agent_stream()       # rebind the pump to the new client
+            await self._reconnect_and_rebind()
             self._transcript.clear()
             self._last_context = None
             self._stats_view.render()
@@ -502,6 +515,8 @@ class TextualCodeApp(App):
         also calls `_on_turn_complete` → `stop()`), but we stop here too so the
         UI reacts instantly to the keypress.
         """
+        if not self._agent_turn_active:
+            return
         self._agent_turn_active = False  # don't let a second Esc re-fire
         try:
             await self._agent.interrupt()
