@@ -65,7 +65,7 @@ It uses the current directory as the project root (reads that folder's
 ### Auth
 
 It uses whatever the **Claude Code CLI** is logged in with — your Pro/Max
-subscription or an `ANTHROPIC_API_KEY`. Nothing is hard-coded.
+subscription or an `ANTHROPIC_API_KEY`. 
 
 ## Update / uninstall
 
