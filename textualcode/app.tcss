@@ -1,0 +1,126 @@
+#body {
+    height: 1fr;
+}
+
+#conversation {
+    width: 1fr;
+    padding: 1 2;
+}
+
+.msg-row {
+    height: auto;
+    margin: 1 0;
+}
+
+.gutter {
+    width: 6;
+    color: $text-muted;
+}
+
+#sidebar {
+    width: 34;
+    height: 1fr;
+}
+
+#stats {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+    border: round $primary 40%;
+    background: $surface;
+}
+
+#tasks {
+    width: 1fr;
+    height: 1fr;
+    min-height: 6;
+    padding: 0 1;
+    border: round $primary 40%;
+    background: $surface;
+}
+
+.task-card {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: heavy $warning;
+}
+
+.task-completed {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: heavy $success;
+}
+
+.task-failed, .task-stopped {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: heavy $error;
+}
+
+Markdown {
+    margin: 0;
+}
+
+.tool {
+    margin: 0;
+    border: round $primary 40%;
+    background: $boost;
+}
+
+.tool > CollapsibleTitle {
+    color: $text-muted;
+    text-style: bold;
+}
+
+#prompt {
+    dock: bottom;
+    margin: 1 2;
+}
+
+PermissionDialog {
+    align: center middle;
+}
+
+#dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    max-height: 80%;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+#dlg-title {
+    margin-bottom: 1;
+}
+
+#dlg-body {
+    max-height: 20;
+    overflow-y: auto;
+    color: $text-muted;
+}
+
+#dlg-hint {
+    margin-top: 1;
+}
+
+#tool-list, #model-set {
+    height: auto;
+    max-height: 16;
+    width: 1fr;
+    margin: 1 0;
+}
+
+#dlg-buttons {
+    height: auto;
+    align: center middle;
+    margin-top: 1;
+}
+
+#dlg-buttons Button {
+    margin: 0 1;
+}

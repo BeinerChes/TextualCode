@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Logs / debug
+task-debug.log
+*.log
+
+# Project config (local overrides)
+.textualcode.json
+
+# uv
+.python-version
