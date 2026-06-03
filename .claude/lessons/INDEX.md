@@ -78,6 +78,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Concurrency
 
 - [idempotency-gates-on-state-commits.md](idempotency-gates-on-state-commits.md) — Use explicit idempotency flags (e.g., _committed) reset in the setup phase, not state-reconstruction guards, to prevent double-application of side effects like double-billing; guards like 'if flag: return' wrongly suppress post-interrupt paths.
+- [ref-count-shared-progress-indicators.md](ref-count-shared-progress-indicators.md) — When independent concurrent operations (agent turn, review, harvest, commit) all control a shared busy/progress indicator, use reference counting keyed per operation (increment on start, decrement on stop, hide at zero) rather than boolean state, to prevent the first stop() from falsely clearing the indicator while others run.
 
 ## Threading
 
@@ -167,3 +168,27 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Permissions
 
 - [use-bypass-permissions-for-readonly-subagents.md](use-bypass-permissions-for-readonly-subagents.md) — Set permission_mode='bypassPermissions' on read-only subagents to allow autonomous tool use without blocking on user confirmation prompts for each operation.
+
+## Security
+
+- [scope-commit-to-reviewed-files.md](scope-commit-to-reviewed-files.md) — When an LLM drafts a commit message based on a truncated diff snapshot, stage only the files the model actually reviewed via git pathspec, not git add -A, to prevent unreviewed secrets and post-snapshot changes from being committed with incorrect descriptions.
+
+## Async
+
+- [guard-exclusive-operations-against-cancellation.md](guard-exclusive-operations-against-cancellation.md) — Before triggering an exclusive operation (group=X), check if one is already active on that group and either refuse with a message or queue; do not silently cancel the running one, to prevent user confusion when a UI action unexpectedly interrupts in-flight work.
+
+## UI Safety
+
+- [escape-untrusted-cli-output-before-markup.md](escape-untrusted-cli-output-before-markup.md) — Route git and shell command output (stderr, file paths, commit text) through an escaper before passing to Text.from_markup(), or use plain Text(..., style=...), to prevent malformed shell output containing [ or ] from raising MarkupError and breaking error-safe panels.
+
+## Parsing
+
+- [specific-prefixes-before-generic.md](specific-prefixes-before-generic.md) — When matching multiple string prefixes, test longer or more-specific ones before shorter/generic ones, or use a dict or trie, to prevent shorter-prefix branches from shadowing and rendering longer-prefix logic unreachable.
+
+## LLM
+
+- [llm-prompt-matches-actual-input.md](llm-prompt-matches-actual-input.md) — The LLM prompt must accurately describe the exact data being sent (working-tree diff vs. staged vs. untracked, truncated vs. full), not the conceptual intent or UI label, to prevent the model from generating inaccurate or misleading output due to input-description mismatch.
+
+## PowerShell
+
+- [powershell-5-stderr-try-catch.md](powershell-5-stderr-try-catch.md) — In PowerShell 5.1 scripts with $ErrorActionPreference = 'Stop', native command stderr cannot be suppressed by output redirects alone (*> $null); wrap in try { ... } catch { } instead, to prevent informational stderr from becoming terminating errors in user-facing installers.

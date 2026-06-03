@@ -37,6 +37,7 @@ from .dispatcher import MessageDispatcher, TaskDebugLog
 from .commands import CommandRouter, UnknownCommand
 from .config import (
     BUILTIN_TOOLS,
+    EFFORT_LEVELS,
     ProjectConfig,
     Settings,
 )
@@ -52,6 +53,7 @@ from .groups import (
     STATS,
     TOOLS_UI,
 )
+from .effort_controller import EffortController
 from .harvest_controller import HarvestController
 from .model_controller import ModelController
 from .session_controller import SessionController
@@ -63,6 +65,7 @@ from .modal_bridge import ModalBridge
 from .renderer import MessageRenderer
 from .transcript import Transcript
 from .screens import (
+    EffortSelector,
     ModelSelector,
     ToolSelector,
 )
@@ -88,8 +91,8 @@ WELCOME = f"""\
 Powered by the **Claude Agent SDK** — uses your Claude Code login (Pro/Max or `ANTHROPIC_API_KEY`).
 
 - Tool calls prompt an **approve/deny** dialog (a / d).
-- `/model` pick model · `/tools` pick tools · `/stats` panel · `/harvest` map session
-- Click **model** or **system tools** in the stats panel to change them.
+- `/model` pick model · `/effort` reasoning effort · `/tools` pick tools · `/stats` panel · `/harvest` map session
+- Click **model**, **effort**, or **system tools** in the stats panel to change them.
 - Settings persist per project in `.textualcode.json`.
 """
 
@@ -115,6 +118,7 @@ class TextualCodeApp(App):
         self._project_dir = Path.cwd()
         self._project = ProjectConfig.load(self._project_dir)
         self._model_label = self._project.model
+        self._effort_label = self._project.effort
         self._modal = ModalBridge(self)
         self._agent = AgentSession(
             self._settings,
@@ -122,6 +126,7 @@ class TextualCodeApp(App):
             question_handler=self._modal.ask_question,
             model=self._project.model,
             tools=self._project.tools,
+            effort=self._project.effort,
         )
         self._commands = CommandRouter()
         self._accountant = TurnAccountant()
@@ -129,6 +134,7 @@ class TextualCodeApp(App):
         self._transcript = Transcript()
         self._last_context: dict | None = None
         self._model_ctl = ModelController(self)
+        self._effort_ctl = EffortController(self)
         self._tools_ctl = ToolsController(self)
         self._harvest_ctl = HarvestController(self)
         self._workspace_ctl = WorkspaceController(self)
@@ -181,6 +187,7 @@ class TextualCodeApp(App):
             on_stream_progress=self._on_stream_progress,
         )
         self._commands.register("model", self._model_ctl.apply)
+        self._commands.register("effort", self._effort_ctl.parse_command)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_ctl.parse_command)
         self._commands.register("harvest", self._harvest_command)
@@ -276,6 +283,7 @@ class TextualCodeApp(App):
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
         yield from self._model_ctl.system_commands()
+        yield from self._effort_ctl.system_commands()
         yield from self._tools_ctl.system_commands()
 
     # ------------------------------------------------------------- handlers --
@@ -310,6 +318,10 @@ class TextualCodeApp(App):
     def action_open_model(self) -> None:
         """Action target for the clickable 'model' row in the stats panel."""
         self.open_model_selector()
+
+    def action_open_effort(self) -> None:
+        """Action target for the clickable 'effort' row in the stats panel."""
+        self.open_effort_selector()
 
     # -------------------------------------------------------------- workers --
     @work(exclusive=True, group=CONNECT)
@@ -417,6 +429,15 @@ class TextualCodeApp(App):
             await self._model_ctl.apply(chosen)
 
     @work(exclusive=True, group=TOOLS_UI)
+    async def open_effort_selector(self) -> None:
+        """Open the RadioSet effort picker and apply the choice."""
+        chosen = await self.push_screen_wait(
+            EffortSelector(list(EFFORT_LEVELS), self._effort_label)
+        )
+        if chosen is not None:
+            await self._effort_ctl.apply(chosen)
+
+    @work(exclusive=True, group=TOOLS_UI)
     async def open_tools_selector(self) -> None:
         """Open the SelectionList modal and apply the chosen tool set."""
         current = self._agent.tools
@@ -486,6 +507,11 @@ class TextualCodeApp(App):
     async def _switch_model_worker(self, name: str) -> None:
         """Sync-callable wrapper for the command palette."""
         await self._model_ctl.apply(name)
+
+    @work(group=AGENT)
+    async def _switch_effort_worker(self, level: str) -> None:
+        """Sync-callable wrapper for the command palette."""
+        await self._effort_ctl.apply(level)
 
     async def on_unmount(self) -> None:
         try:

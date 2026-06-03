@@ -9,6 +9,7 @@ from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
 
+from .config import effort_display
 from .formatting import _short
 from .stats import UsageStats
 
@@ -71,7 +72,13 @@ class StatsPanel(Static):
             f" [{color}]{'█' * filled}[/][grey30]{'█' * empty}[/grey30]"
         )
 
-    def show(self, stats: UsageStats, model: str, context: dict | None = None) -> None:
+    def show(
+        self,
+        stats: UsageStats,
+        model: str,
+        context: dict | None = None,
+        effort: str = "default",
+    ) -> None:
         rate = stats.cache_hit_rate
         rcolor = self._rate_color(rate)
 
@@ -79,6 +86,12 @@ class StatsPanel(Static):
         model_cell = Text(model, style=Style(meta={"@click": "app.open_model"}))
         model_cell.stylize("underline")
         head.add_row("[dim]model[/dim]", model_cell)
+        # Clickable: opens the effort selector (see App.action_open_effort).
+        effort_cell = Text(
+            effort_display(effort), style=Style(meta={"@click": "app.open_effort"})
+        )
+        effort_cell.stylize("underline")
+        head.add_row("[dim]effort[/dim]", effort_cell)
         head.add_row("[dim]turns[/dim]", f"[b]{stats.turns}[/b]")
 
         tok = self._grid()

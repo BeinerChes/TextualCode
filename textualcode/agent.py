@@ -37,6 +37,7 @@ class AgentSession:
         question_handler: QuestionHandler | None = None,
         model: str | None = None,
         tools: list[str] | None = None,
+        effort: str | None = None,
     ) -> None:
         self._settings = settings
         self._permission_handler = permission_handler
@@ -46,6 +47,7 @@ class AgentSession:
         self._models: list[dict] = []
         self.model = model      # CLI value ("sonnet"/"haiku"/"default"/raw id) or None
         self.tools = tools      # None = all built-ins; [] = none; subset = list
+        self.effort = effort    # EffortLevel str, or "default"/None = let model decide
 
     @property
     def connected(self) -> bool:
@@ -55,6 +57,11 @@ class AgentSession:
         options = ClaudeAgentOptions(
             system_prompt=self._settings.system_prompt,
             model=self._normalize_model(self.model),
+            # Reasoning effort. Connect-time only — the SDK exposes set_model /
+            # set_permission_mode but no set_effort (verified against
+            # claude-agent-sdk==0.2.88, client.py), so changing it reconnects.
+            # "default"/None → leave unset so the model decides.
+            effort=self._normalize_effort(self.effort),
             # None = full built-in set; [] = none; [names] = exactly those.
             tools=self.tools,
             strict_mcp_config=True,  # don't pull in ambient project/global MCP servers
@@ -78,6 +85,11 @@ class AgentSession:
     def _normalize_model(model: str | None) -> str | None:
         """`"default"`/None both mean "let the CLI pick its recommended model"."""
         return None if model in (None, "default") else model
+
+    @staticmethod
+    def _normalize_effort(effort: str | None) -> str | None:
+        """`"default"`/None both mean "omit effort and let the model decide"."""
+        return None if effort in (None, "default") else effort
 
     def available_models(self) -> list[dict]:
         """The model list reported by the connected CLI (value/displayName/desc)."""

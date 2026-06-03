@@ -221,7 +221,7 @@ PermissionDialog {
     margin-top: 1;
 }
 
-#tool-list, #model-set {
+#tool-list, #model-set, #effort-set {
     height: auto;
     max-height: 16;
     width: 1fr;

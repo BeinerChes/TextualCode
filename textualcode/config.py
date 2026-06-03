@@ -15,6 +15,40 @@ CONFIG_FILENAME = ".textualcode.json"
 # The CLI's selector for its recommended/default model (current latest Opus).
 DEFAULT_MODEL = "default"
 
+# Reasoning-effort levels for the SDK's connect-time `effort` option
+# (ClaudeAgentOptions.effort). "default" means "leave the option unset and let
+# the model decide"; the rest map 1:1 to the SDK's
+# EffortLevel = Literal["low", "medium", "high", "xhigh", "max"] (verified
+# against claude-agent-sdk==0.2.88, types.py). Lower effort uses fewer tokens
+# per turn and is faster/cheaper; higher trades latency + cost for depth.
+DEFAULT_EFFORT = "default"
+
+EFFORT_LEVELS: tuple[dict[str, str], ...] = (
+    {"value": "default", "label": "Default",
+     "description": "Leave unset — the model picks its own reasoning depth."},
+    {"value": "low", "label": "Low",
+     "description": "Minimal reasoning, fastest — lookups, listing files."},
+    {"value": "medium", "label": "Medium",
+     "description": "Balanced reasoning — routine edits, standard tasks."},
+    {"value": "high", "label": "High",
+     "description": "Thorough analysis — refactors, debugging."},
+    {"value": "xhigh", "label": "XHigh",
+     "description": "Extended depth (Opus 4.7; falls back to high elsewhere)."},
+    {"value": "max", "label": "Max",
+     "description": "Maximum depth — hard, multi-step problems."},
+)
+
+# The valid `effort` strings a ProjectConfig / selector may hold.
+EFFORT_VALUES: tuple[str, ...] = tuple(level["value"] for level in EFFORT_LEVELS)
+
+
+def effort_display(value: str) -> str:
+    """Human label for an effort `value` (e.g. "xhigh" -> "XHigh")."""
+    for level in EFFORT_LEVELS:
+        if level["value"] == value:
+            return str(level["label"])
+    return value
+
 
 def match_model(name: str, models: list[dict]) -> str:
     """Resolve a user string to a model `value` from the live server list.
@@ -89,6 +123,7 @@ class ProjectConfig:
 
     model: str = "default"               # alias or raw id; "default" = SDK default
     tools: list[str] | None = None       # None = all built-ins; [] = none; subset = list
+    effort: str = DEFAULT_EFFORT         # one of EFFORT_VALUES; "default" = unset
 
     @classmethod
     def load(cls, directory: Path) -> "ProjectConfig":
@@ -100,7 +135,14 @@ class ProjectConfig:
         return cls(
             model=str(data.get("model", "default")),
             tools=cls._read_tools(data),
+            effort=cls._read_effort(data),
         )
+
+    @staticmethod
+    def _read_effort(data: dict) -> str:
+        """Accept only a known effort value; fall back to the default otherwise."""
+        value = str(data.get("effort", DEFAULT_EFFORT)).strip().lower()
+        return value if value in EFFORT_VALUES else DEFAULT_EFFORT
 
     @staticmethod
     def _read_tools(data: dict) -> list[str] | None:

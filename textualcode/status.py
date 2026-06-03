@@ -69,4 +69,5 @@ class StatsView:
             self._app._accountant.display_stats,
             self._app._model_label,
             self._app._last_context,
+            self._app._effort_label,
         )

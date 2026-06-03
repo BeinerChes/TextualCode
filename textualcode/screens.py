@@ -413,3 +413,51 @@ class ModelSelector(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class EffortSelector(ModalScreen[str | None]):
+    """Pick the agent reasoning effort from a radio list. Dismisses with the
+    chosen `value` (an EFFORT_VALUES string), or None if cancelled."""
+
+    BINDINGS = [
+        ("s", "save", "Select"),
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, levels: list[dict], current: str | None) -> None:
+        super().__init__()
+        self._levels = levels
+        self._current = str(current)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(
+                "🎚️ [b]Choose effort[/b] — Select (s) · Esc cancels", id="dlg-title"
+            )
+            with RadioSet(id="effort-set", compact=bool(getattr(self.app, "compact", False))):
+                for level in self._levels:
+                    label = level.get("label", level["value"])
+                    desc = level.get("description", "")
+                    yield RadioButton(
+                        f"{label} — {desc}" if desc else str(label),
+                        value=str(level["value"]) == self._current,
+                    )
+            with Horizontal(id="dlg-buttons"):
+                yield Button("Select (s)", variant="success", id="select")
+                yield Button("Cancel", variant="default", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "select":
+            self.action_save()
+        else:
+            self.dismiss(None)
+
+    def action_save(self) -> None:
+        index = self.query_one(RadioSet).pressed_index
+        if index < 0:
+            self.dismiss(None)
+            return
+        self.dismiss(str(self._levels[index]["value"]))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
