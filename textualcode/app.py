@@ -35,6 +35,8 @@ from .config import (
     Settings,
     match_model,
 )
+from .errors import report_error
+from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
 from .harvest import Harvester
 from .lessons import write_harvest
 from .permissions import Decision, describe_key, similarity_key
@@ -319,7 +321,10 @@ class TextualCodeApp(App):
         try:
             await self._agent.set_model(value)
         except Exception as exc:  # noqa: BLE001 - report bad ids cleanly
-            await self._conversation.add_markdown(f"> **Could not switch model:** {exc}")
+            await report_error(
+                self._conversation, None, exc,
+                message=f"> **Could not switch model:** {exc}",
+            )
             return
 
         self._model_label = value
@@ -339,7 +344,7 @@ class TextualCodeApp(App):
         self.open_model_selector()
 
     # -------------------------------------------------------------- workers --
-    @work(exclusive=True, group="connect")
+    @work(exclusive=True, group=CONNECT)
     async def connect_agent(self) -> None:
         try:
             await self._agent.connect()
@@ -348,12 +353,15 @@ class TextualCodeApp(App):
             self.message_pump()  # start reading the message stream
         except Exception as exc:  # noqa: BLE001 - surface startup failures
             self.sub_title = "offline"
-            await self._conversation.add_markdown(
-                f"> **Could not start the agent.** {type(exc).__name__}: {exc}\n>\n"
-                "> Make sure the Claude Code CLI is installed and logged in."
+            await report_error(
+                self._conversation, None, exc,
+                message=(
+                    f"> **Could not start the agent.** {type(exc).__name__}: {exc}\n>\n"
+                    "> Make sure the Claude Code CLI is installed and logged in."
+                ),
             )
 
-    @work(exclusive=True, group="connect")
+    @work(exclusive=True, group=CONNECT)
     async def reconnect_agent(self) -> None:
         tools = self._agent.tools
         desc = "all" if tools is None else ("none" if not tools else f"{len(tools)} selected")
@@ -368,11 +376,9 @@ class TextualCodeApp(App):
             )
         except Exception as exc:  # noqa: BLE001 - surface reconnect failures
             self.sub_title = "offline"
-            await self._conversation.add_markdown(
-                f"> **Reconnect failed:** {type(exc).__name__}: {exc}"
-            )
+            await report_error(self._conversation, "Reconnect failed:", exc)
 
-    @work(exclusive=True, group="connect")
+    @work(exclusive=True, group=CONNECT)
     async def restart_session(self) -> None:
         """Free the context window: tear down the SDK client and start a fresh
         session (the supported reset — there's no in-process clear API yet).
@@ -394,11 +400,9 @@ class TextualCodeApp(App):
             )
         except Exception as exc:  # noqa: BLE001 - surface restart failures
             self.sub_title = "offline"
-            await self._conversation.add_markdown(
-                f"> **Restart failed:** {type(exc).__name__}: {exc}"
-            )
+            await report_error(self._conversation, "Restart failed:", exc)
 
-    @work(exclusive=True, group="pump")
+    @work(exclusive=True, group=PUMP)
     async def message_pump(self) -> None:
         """Single long-lived reader of the SDK message stream.
 
@@ -466,12 +470,12 @@ class TextualCodeApp(App):
         self.sub_title = f"agent sdk · {self._model_label}"
         self.refresh_context()
 
-    @work(exclusive=True, group="stats")
+    @work(exclusive=True, group=STATS)
     async def refresh_context(self) -> None:
         self._last_context = await self._agent.context_usage()
         self._stats_panel.show(self._stats, self._model_label, self._last_context)
 
-    @work(exclusive=True, group="tools-ui")
+    @work(exclusive=True, group=TOOLS_UI)
     async def open_model_selector(self) -> None:
         """Open the RadioSet model picker and apply the choice."""
         models = self._agent.available_models()
@@ -484,7 +488,7 @@ class TextualCodeApp(App):
         if chosen is not None:
             await self.switch_model(chosen)
 
-    @work(exclusive=True, group="tools-ui")
+    @work(exclusive=True, group=TOOLS_UI)
     async def open_tools_selector(self) -> None:
         """Open the SelectionList modal and apply the chosen tool set."""
         current = self._agent.tools
@@ -496,7 +500,7 @@ class TextualCodeApp(App):
         tools = None if set(chosen) == set(BUILTIN_TOOLS) else chosen
         self._apply_tools(tools)
 
-    @work(exclusive=True, group="agent")
+    @work(exclusive=True, group=AGENT)
     async def send_to_agent(self, text: str) -> None:
         """Submit the prompt; the message pump renders the streamed response."""
         self._thinking.start()
@@ -510,9 +514,9 @@ class TextualCodeApp(App):
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
             self._agent_turn_active = False
             self._thinking.stop()
-            await self._conversation.add_markdown(f"> **Error:** {type(exc).__name__}: {exc}")
+            await report_error(self._conversation, "Error:", exc)
 
-    @work(exclusive=True, group="interrupt")
+    @work(exclusive=True, group=INTERRUPT)
     async def interrupt_agent(self) -> None:
         """Send the interrupt to the SDK and stop the thinking bar immediately.
 
@@ -524,14 +528,12 @@ class TextualCodeApp(App):
         try:
             await self._agent.interrupt()
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
-            await self._conversation.add_markdown(
-                f"> **Interrupt failed:** {type(exc).__name__}: {exc}"
-            )
+            await report_error(self._conversation, "Interrupt failed:", exc)
             return
         self._thinking.stop()
         await self._conversation.add_markdown("> ⏹ Interrupted.")
 
-    @work(exclusive=True, group="harvest")
+    @work(exclusive=True, group=HARVEST)
     async def harvest_now(self) -> None:
         """Map the session to disk via a cheap Haiku call (explicit user spend).
 
@@ -551,17 +553,13 @@ class TextualCodeApp(App):
             result = await Harvester(model="haiku").run(self._transcript.render())
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
             self._thinking.stop()
-            await self._conversation.add_markdown(
-                f"> **Harvest failed:** {type(exc).__name__}: {exc}"
-            )
+            await report_error(self._conversation, "Harvest failed:", exc)
             return
         try:
             paths = write_harvest(self._project_dir, result)
         except Exception as exc:  # noqa: BLE001 - report write failures cleanly
             self._thinking.stop()
-            await self._conversation.add_markdown(
-                f"> **Could not write harvest files:** {type(exc).__name__}: {exc}"
-            )
+            await report_error(self._conversation, "Could not write harvest files:", exc)
             return
         self._thinking.stop()
         cost = f" · ${result.cost:.4f}" if result.cost else ""
@@ -586,7 +584,7 @@ class TextualCodeApp(App):
         if restart:
             self.restart_session()
 
-    @work(group="agent")
+    @work(group=AGENT)
     async def _switch_model_worker(self, name: str) -> None:
         """Sync-callable wrapper for the command palette."""
         await self.switch_model(name)
