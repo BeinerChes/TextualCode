@@ -36,6 +36,8 @@ class MessageRenderer:
             if isinstance(block, TextBlock):
                 await self._view.add_message("agent", block.text)
             elif isinstance(block, ToolUseBlock):
+                if block.name == "AskUserQuestion":
+                    continue  # shown as an interactive form (QuestionForm), not a card
                 await self._view.add_widget(
                     ToolCard(
                         block,

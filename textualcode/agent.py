@@ -22,6 +22,8 @@ from .permissions import Decision, PermissionPolicy
 
 # Asks the UI to approve a tool call and returns the user's Decision.
 PermissionHandler = Callable[[str, dict], Awaitable[Decision]]
+# Renders an AskUserQuestion form; returns {question_text: answer(s)} or None.
+QuestionHandler = Callable[[list[dict]], Awaitable[dict | None]]
 
 
 class AgentSession:
@@ -32,11 +34,13 @@ class AgentSession:
         settings: Settings,
         permission_handler: PermissionHandler | None = None,
         *,
+        question_handler: QuestionHandler | None = None,
         model: str | None = None,
         tools: list[str] | None = None,
     ) -> None:
         self._settings = settings
         self._permission_handler = permission_handler
+        self._question_handler = question_handler
         self._policy = PermissionPolicy()
         self._client: ClaudeSDKClient | None = None
         self._models: list[dict] = []
@@ -119,6 +123,8 @@ class AgentSession:
 
     async def _approve_tool(self, tool_name, tool_input, context):
         """Tiered policy: auto-allow safe/remembered calls, else ask the UI."""
+        if tool_name == "AskUserQuestion":
+            return await self._answer_question(tool_input)
         if self._policy.auto_allow(tool_name, tool_input):
             return PermissionResultAllow()
         if self._permission_handler is None:
@@ -129,3 +135,19 @@ class AgentSession:
         if decision.allow:
             return PermissionResultAllow()
         return PermissionResultDeny(message="Denied by user.")
+
+    async def _answer_question(self, tool_input: dict):
+        """Render Claude's AskUserQuestion and return the answers as the result.
+
+        Answers go back via `updated_input`: {questions, answers} where answers
+        maps each question's text to the chosen option label(s).
+        """
+        questions = tool_input.get("questions", [])
+        if self._question_handler is None:
+            return PermissionResultAllow()  # no UI: let it proceed unanswered
+        answers = await self._question_handler(questions)
+        if answers is None:
+            return PermissionResultDeny(message="User dismissed the question.")
+        return PermissionResultAllow(
+            updated_input={"questions": questions, "answers": answers}
+        )

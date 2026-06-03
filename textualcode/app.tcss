@@ -120,6 +120,23 @@ PermissionDialog {
     margin: 1 0;
 }
 
+#question-scroll {
+    height: auto;
+    max-height: 22;
+    margin: 1 0;
+}
+
+.q-text {
+    margin: 1 0 0 0;
+}
+
+.q-input {
+    height: auto;
+    max-height: 8;
+    width: 1fr;
+    margin: 0 0 1 0;
+}
+
 #dlg-buttons {
     height: auto;
     align: center middle;

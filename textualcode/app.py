@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from claude_agent_sdk import (
+    AssistantMessage,
     ResultMessage,
     TaskNotificationMessage,
     TaskProgressMessage,
@@ -34,9 +35,12 @@ from .config import (
     Settings,
     match_model,
 )
+from .harvest import Harvester
+from .lessons import write_harvest
 from .permissions import Decision, describe_key, similarity_key
 from .renderer import MessageRenderer
-from .screens import ModelSelector, PermissionDialog, ToolSelector
+from .transcript import Transcript
+from .screens import ModelSelector, PermissionDialog, QuestionForm, ToolSelector
 from .stats import UsageStats
 from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
 
@@ -80,11 +84,13 @@ class TextualCodeApp(App):
         self._agent = AgentSession(
             self._settings,
             permission_handler=self._ask_permission,
+            question_handler=self._ask_question,
             model=self._project.model,
             tools=self._project.tools,
         )
         self._commands = CommandRouter()
         self._stats = UsageStats()
+        self._transcript = Transcript()
         self._last_context: dict | None = None
         self._models: list[dict] = []  # populated after connect
         # Set in on_mount once the widgets exist.
@@ -118,6 +124,7 @@ class TextualCodeApp(App):
         self._commands.register("model", self.switch_model)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_command)
+        self._commands.register("compact", self._harvest_command)
         await self._conversation.add_markdown(WELCOME)
         self.query_one("#prompt", Input).focus()
         self.connect_agent()
@@ -127,6 +134,13 @@ class TextualCodeApp(App):
 
     async def _toggle_stats_command(self, arg: str) -> None:
         self.action_toggle_stats()
+
+    async def _harvest_command(self, arg: str) -> None:
+        self.harvest_now()
+
+    def action_harvest(self) -> None:
+        """Action target for the clickable '⟳ compact' link in the stats panel."""
+        self.harvest_now()
 
     async def _tools_command(self, arg: str) -> None:
         """`/tools` opens the selector; `/tools on|off` enables all / none."""
@@ -166,6 +180,21 @@ class TextualCodeApp(App):
                 future.set_result(result or Decision(allow=False))
 
         self.push_screen(PermissionDialog(tool_name, tool_input, label), _resolve)
+        return await future
+
+    async def _ask_question(self, questions: list[dict]) -> dict | None:
+        """Show the AskUserQuestion form and return the answers (or None).
+
+        Same push_screen + Future bridge as _ask_permission (the SDK calls this
+        from its own task, not a Textual worker).
+        """
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def _resolve(result: dict | None) -> None:
+            if not future.done():
+                future.set_result(result)
+
+        self.push_screen(QuestionForm(questions), _resolve)
         return await future
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
@@ -214,6 +243,7 @@ class TextualCodeApp(App):
             return
 
         await self._conversation.add_message("user", text)
+        self._transcript.add_user(text)
         if not self._agent.connected:
             await self._conversation.add_markdown("> Agent not connected yet — try again in a moment.")
             return
@@ -319,6 +349,8 @@ class TextualCodeApp(App):
             # One notification ends the whole task → finish every card under it.
             await self._task_panel.finish_task(message.task_id, message.status, message.summary)
             return
+        if isinstance(message, AssistantMessage):
+            self._transcript.add_assistant(message)
         await self._renderer.render(message)
         if isinstance(message, ResultMessage):
             self._on_turn_complete()
@@ -388,6 +420,40 @@ class TextualCodeApp(App):
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
             self._thinking.stop()
             await self._conversation.add_markdown(f"> **Error:** {type(exc).__name__}: {exc}")
+
+    @work(exclusive=True, group="harvest")
+    async def harvest_now(self) -> None:
+        """Map the session to disk via a cheap Haiku call (explicit user spend).
+
+        Non-destructive: writes `.claude/state.md` plus any new lessons under
+        `.claude/lessons/`; the live conversation session is untouched.
+        """
+        if self._transcript.empty:
+            await self._conversation.add_markdown(
+                "> Nothing to harvest yet — have a conversation first."
+            )
+            return
+        await self._conversation.add_markdown("> ⟳ Harvesting this session with Haiku…")
+        try:
+            result = await Harvester(model="haiku").run(self._transcript.render())
+        except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
+            await self._conversation.add_markdown(
+                f"> **Harvest failed:** {type(exc).__name__}: {exc}"
+            )
+            return
+        try:
+            paths = write_harvest(self._project_dir, result)
+        except Exception as exc:  # noqa: BLE001 - report write failures cleanly
+            await self._conversation.add_markdown(
+                f"> **Could not write harvest files:** {type(exc).__name__}: {exc}"
+            )
+            return
+        cost = f" · ${result.cost:.4f}" if result.cost else ""
+        added = len(paths.new_lessons)
+        lessons_note = f", +{added} lesson(s)" if added else ""
+        await self._conversation.add_markdown(
+            f"> ✅ Harvested → `{paths.root.name}/state.md`{lessons_note}{cost}."
+        )
 
     @work(group="agent")
     async def _switch_model_worker(self, name: str) -> None:

@@ -43,6 +43,12 @@ class PromptInput(Input):
                 return
         super()._on_paste(event)
 
+    def action_paste(self) -> None:
+        """No-op: in a terminal, Ctrl+V is delivered as a bracketed paste and
+        handled by `_on_paste`. Textual's default `action_paste` would insert a
+        SECOND copy from the internal clipboard, causing a duplicate."""
+        return
+
 
 class ConversationView(VerticalScroll):
     """A scrollable transcript. Each entry is a row with a numbered gutter."""
@@ -226,6 +232,15 @@ class StatsPanel(Static):
                 grid.add_row(label, tokens)
             else:
                 grid.add_row(name, tokens)
+
+        # ⟳ compact: clickable harvest trigger (see App.action_harvest). A context
+        # ≥60% full risks "context rot" (quality decays well before the hard
+        # limit) — flag it here, in the same row, as a nudge to compact.
+        grid.add_row("", "")
+        compact = Text("⟳ compact", style=Style(meta={"@click": "app.harvest"}))
+        compact.stylize("underline")
+        warn = "[yellow]↯ rot risk[/yellow]" if pct >= 60 else ""
+        grid.add_row(compact, warn)
 
 
 _AVATARS = ["(•‿•)", "(o_o)", "(>‿<)", "(^_^)", "(•_•)", "(¬‿¬)", "(*_*)", "(·_·)", "(ↁ_ↁ)"]

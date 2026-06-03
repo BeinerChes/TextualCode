@@ -52,6 +52,7 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "NotebookEdit",
     "TodoWrite",
     "Task",
+    "AskUserQuestion",  # lets Claude ask clarifying questions (rendered as a form)
 )
 
 SYSTEM_PROMPT = (

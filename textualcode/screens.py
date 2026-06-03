@@ -7,12 +7,18 @@ import json
 from collections.abc import Iterable
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, RadioButton, RadioSet, SelectionList, Static
 from textual.widgets.selection_list import Selection
 
 from .permissions import Decision
+
+
+def _option_label(option: dict) -> str:
+    label = option.get("label", "")
+    desc = option.get("description", "")
+    return f"{label} — {desc}" if desc else str(label)
 
 
 class PermissionDialog(ModalScreen[Decision]):
@@ -105,6 +111,73 @@ class ToolSelector(ModalScreen[list[str] | None]):
 
     def action_save(self) -> None:
         self.dismiss(list(self.query_one(SelectionList).selected))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class QuestionForm(ModalScreen[dict | None]):
+    """Render an `AskUserQuestion` tool call as an interactive form.
+
+    Dismisses with {question_text: label | [labels]} or None if cancelled.
+    """
+
+    BINDINGS = [
+        ("ctrl+s", "submit", "Submit"),
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, questions: list[dict]) -> None:
+        super().__init__()
+        self._questions = questions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(
+                "❓ [b]Claude has a question[/b] — Submit (Ctrl+S) · Esc cancels",
+                id="dlg-title",
+            )
+            with VerticalScroll(id="question-scroll"):
+                for index, q in enumerate(self._questions):
+                    header = q.get("header", "")
+                    text = q.get("question", "")
+                    yield Static(f"[b]{header}[/b]  {text}".strip(), classes="q-text")
+                    options = q.get("options", [])
+                    if q.get("multiSelect"):
+                        yield SelectionList[str](
+                            *[
+                                Selection(_option_label(o), o.get("label", ""))
+                                for o in options
+                            ],
+                            id=f"q-{index}",
+                            classes="q-input",
+                        )
+                    else:
+                        with RadioSet(id=f"q-{index}", classes="q-input"):
+                            for o in options:
+                                yield RadioButton(_option_label(o))
+            with Horizontal(id="dlg-buttons"):
+                yield Button("Submit (Ctrl+S)", variant="success", id="submit")
+                yield Button("Cancel", variant="default", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "submit":
+            self.action_submit()
+        else:
+            self.dismiss(None)
+
+    def action_submit(self) -> None:
+        answers: dict = {}
+        for index, q in enumerate(self._questions):
+            qtext = q.get("question", "")
+            options = q.get("options", [])
+            widget = self.query_one(f"#q-{index}")
+            if q.get("multiSelect"):
+                answers[qtext] = list(widget.selected)  # type: ignore[attr-defined]
+            else:
+                idx = widget.pressed_index  # type: ignore[attr-defined]
+                answers[qtext] = options[idx].get("label", "") if 0 <= idx < len(options) else ""
+        self.dismiss(answers)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
