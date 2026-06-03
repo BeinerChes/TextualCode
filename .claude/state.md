@@ -1,34 +1,39 @@
 # Session State — 2026-06-03
 
 ## Goal
-Display multiple consecutive agent tool calls in a single compact, expandable line instead of rendering each as a full-width bordered box
+Verify drag-and-drop file insertion works and fix long-question text truncation in AskUserDialog
 
 ## Why
-When an agent makes many tool calls, each one displayed as a separate bordered container consumes excessive vertical space and creates cognitive clutter, making conversation history hard to scan
+Prior session incorrectly concluded drag-drop wasn't working in Windows Terminal; AskUserDialog was truncating long option text instead of wrapping
 
 ## What was done
-- Examined screenshot showing multiple full-width bordered tool call boxes
-- Explored codebase structure: traced ToolCard widget, MessageRenderer, and CSS styling
-- Analyzed turn/message lifecycle in renderer.py to identify grouping reset boundaries
-- Designed ToolGroupCard (Collapsible subclass) to hold consecutive tools with add_tool() streaming method
-- Implemented ToolGroupCard widget in widgets.py with dynamic title showing count and tool names
-- Updated MessageRenderer._render_assistant() to accumulate consecutive ToolUseBlocks into a single group
-- Configured grouping to reset on agent text, AskUserQuestion, or ResultMessage (turn boundaries)
-- Updated CSS in app.tcss to remove borders, padding, and background from tool containers
-- Verified all module imports resolve with grep
-- Confirmed code compiles without errors
+- Verified instrumentation from prior session was in place for drag-drop testing
+- Instructed user to test file drop and Ctrl+V separately to compare event types
+- Read drop_debug.log after user dropped file; confirmed PASTE event with full file path
+- Analyzed logs showing drop and Ctrl+V both produce identical bracketed PASTE events
+- Removed all debug instrumentation (_drop_debug calls, _on_mouse_down probe) and deleted log file
+- Investigated RadioButton/ToggleButton source: found get_content_height hardcoded to 1, _make_label keeps only first line
+- Investigated SelectionList/OptionList: found wrapping causes indexing bugs, widget designed single-line-only in Textual 1.0
+- Verified installed Textual 8.2.7 is latest; confirmed framework moved in wrong direction, no upgrade path
+- Asked user for UX choice between Detail pane and Custom wrapped rows design
+- Implemented ChoiceList widget with Static-based rows that wrap, supporting single/multi-select
+- Swapped ChoiceList into QuestionForm, updated handler names and CSS
+- Added .q-choices and .choice-row styles to app.tcss
+- Wrote headless run_test() pilot verifying row height expansion, wrapping, and selection logic
+- Removed temp test file
 
 ## Mistakes / corrections
-- _(none)_
+- Prior session's diagnosis (drag-drop broken due to terminal limitation) was disproven by instrumented log showing PASTE event
+- Earlier CSS fix (text-wrap: wrap on RadioButton) was dead code; widget is structurally limited to one line
+- First attempt to write test used PowerShell heredoc syntax (doesn't work); rewrote to temp file instead
 
 ## Result
-Three-part implementation: new ToolGroupCard widget in widgets.py combining a Collapsible header with incremental tool mounting; updated MessageRenderer in renderer.py to group consecutive ToolUseBlocks and reset groups at turn boundaries; CSS in app.tcss compacted for tight display. Code compiles successfully. End state: multiple tool calls collapse to a single line '▶ 🔧 N tools called · names', expandable to reveal individual ToolCards, with grouping correctly reset between conversation turns.  _(satisfied: partial)_
+Drag-and-drop confirmed working: Windows Terminal converts drops to bracketed PASTE events, already handled by _on_paste. Long-text truncation in AskUserDialog fixed: new ChoiceList widget with Static rows replaces RadioSet, verified to wrap and select correctly. Debug instrumentation cleaned up.  _(satisfied: yes)_
 
 ## Next
-- Launch TUI to verify collapsed/expanded visual behavior and expand/collapse interactions
-- Confirm grouping resets properly at turn boundaries (agent text, user questions, result messages)
-- Verify that individual tools within an expanded group remain clickable to show full JSON input
+- User should run app visually to confirm AskUserDialog wrapping in their terminal
+- Consider applying ChoiceList to ModelSelector which also uses RadioSet and has same truncation risk
 
 ## Map
-- **keywords:** tool calls, collapsible, grouping, compact rendering, consecutive tools, turn boundaries, ToolGroupCard, MessageRenderer, Textual, ui clutter
-- **keyfiles:** widgets.py, renderer.py, app.tcss, app.py
+- **keywords:** drag-and-drop, paste event, windows terminal, textual, radiobutton, selectionlist, wrapping, truncation, choicelist, static widget, get_content_height, text-wrap, keyboard input, mouse selection, focusable
+- **keyfiles:** textualcode/widgets.py, textualcode/screens.py, textualcode/app.tcss

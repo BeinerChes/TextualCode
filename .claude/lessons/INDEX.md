@@ -5,6 +5,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Refactoring
 
 - [test-links-after-tool-rename.md](test-links-after-tool-rename.md) — After renaming tools or modules, verify all navigation links and handler references function end-to-end before declaring the refactor complete, to prevent broken routing and stuck state.
+- [split-bug-fixes-from-pure-refactors.md](split-bug-fixes-from-pure-refactors.md) — Separate confirmed-bug fixes from pure-refactor extractions into different steps; do bugs first (statically verifiable), defer refactors (harder to verify without live testing) to prevent unverifiable behavior changes from masking unforeseen regressions.
 
 ## UX Safety
 
@@ -30,6 +31,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [consult-installed-source-for-data-structures.md](consult-installed-source-for-data-structures.md) — When investigating a framework's data structures or API surface, consult the installed source code and docs instead of memory — this is how you discover available fields (e.g., model_usage with costUSD) and avoid false 'not available' conclusions.
 - [verify-api-web-search-first.md](verify-api-web-search-first.md) — Check the installed API version first, then search Anthropic's official docs (or library GitHub) scoped to that version instead of reading .venv source immediately, preventing stale or incorrect API calls due to outdated version assumptions.
 - [verify-undocumented-apis-against-source.md](verify-undocumented-apis-against-source.md) — When relying on undocumented internal APIs, verify behavior against the installed source code directly rather than public documentation, to prevent depending on unstable implementation details.
+- [dev-reviewer-workflow-for-large-refactors.md](dev-reviewer-workflow-for-large-refactors.md) — Use parameterized dev↔reviewer loops for refactors: dev implements against explicit scope, reviewer web-verifies claims and pushes back hard, then independent gate verifies imports/greps/diffs before commit; catches out-of-scope creep and drift from plan.
 
 ## SDK Configuration
 
@@ -49,13 +51,54 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Debugging
 
 - [diagnose-sdk-shapes-empirically.md](diagnose-sdk-shapes-empirically.md) — When SDK data shapes or formats are uncertain, run diagnostics against the live SDK with actual app connect options before designing; format mismatches (model ID suffixes, field presence, token accounting) only surface in practice, not in docs.
+- [instrument-before-hypothesize.md](instrument-before-hypothesize.md) — For opaque input handling (terminal events, user actions), add logging to capture actual event type and content before forming theories; let observed data drive diagnosis instead of guessing at cause.
 
 ## UI
 
 - [no-confirmation-non-destructive-action.md](no-confirmation-non-destructive-action.md) — Execute non-destructive actions (interrupt, pause, cancel) immediately without confirmation to match user expectations, preventing unnecessary friction and delays for reversible operations.
 - [group-streaming-items-collapsibly.md](group-streaming-items-collapsibly.md) — Group consecutive streaming operations (tool calls, function invocations) into a single collapsible container with a summary header, expanding on demand, to prevent UI clutter and keep conversations scannable.
+- [css-wrapping-requires-width-constraint.md](css-wrapping-requires-width-constraint.md) — Set `text-wrap: wrap` on text widgets AND constrain their width (e.g., `width: 1fr` in flex layout, `width: <px>` in container) to force wrapping; without the width constraint, widgets size to their natural content width and clip or truncate instead of wrapping.
+- [decouple-content-render-from-selection-widget.md](decouple-content-render-from-selection-widget.md) — When a selectable widget (RadioButton, OptionList) truncates multi-line text, render content in composable Static/Label containers and manage selection separately; this allows text wrapping independent of the selection widget's constraints.
 
 ## Architecture
 
 - [flag-interruptible-operation-precisely.md](flag-interruptible-operation-precisely.md) — Flag the specific interruptible operation (not just the UI state) when multiple concurrent operations share a loading indicator, preventing interrupt signals from accidentally affecting unrelated work.
 - [reset-groups-at-turn-boundaries.md](reset-groups-at-turn-boundaries.md) — When grouping sequential operations in a conversation UI, reset the grouping at turn boundaries (agent text, user questions, result messages) to preserve conversational flow and logic.
+- [apply-ui-density-as-app-reactive.md](apply-ui-density-as-app-reactive.md) — Expose UI density (compact mode, margins, borders, padding) as a single reactive property on the App with a watcher that applies changes to all widgets at once; this pattern lets future Settings pages control density by simply setting `app.compact = value` without rework.
+
+## QA
+
+- [byte-identical-user-output-verification.md](byte-identical-user-output-verification.md) — When extracting code that outputs user-facing strings, verify the exact output remains byte-identical including punctuation, type names, and formatting; prevents silent behavior regression from rephrasings or dropped prefixes.
+
+## Concurrency
+
+- [idempotency-gates-on-state-commits.md](idempotency-gates-on-state-commits.md) — Use explicit idempotency flags (e.g., _committed) reset in the setup phase, not state-reconstruction guards, to prevent double-application of side effects like double-billing; guards like 'if flag: return' wrongly suppress post-interrupt paths.
+
+## Threading
+
+- [cancel-workers-before-rebind.md](cancel-workers-before-rebind.md) — Cancel old worker groups *before* creating and binding new ones during reconnect/restart, not after; prevents old workers from reading a torn-down resource and queuing stale messages into the new pump.
+
+## Error Handling
+
+- [narrow-exception-handlers-with-care.md](narrow-exception-handlers-with-care.md) — When narrowing a blanket except: pass, verify the surrounding framework won't crash (e.g., exit_on_error=True) on unforeseen exceptions; add safety handling to surface unexpected errors instead of swallowing them silently.
+
+## Testing
+
+- [test-interrupted-state-separately.md](test-interrupted-state-separately.md) — Behavior under interruption (Esc, cancel) often differs from normal flow; verify guards intended for normal paths don't wrongly suppress post-interrupt side effects (e.g., ResultMessage handling, dialog dismissal).
+
+## Risk Management
+
+- [defer-pure-refactors-without-live-test.md](defer-pure-refactors-without-live-test.md) — Pure refactors (moving code to new modules, no intended behavior change) are hard to verify without running the actual application; if you can't TUI-test, defer them until after behavior-changing work is landed and verified.
+
+## Validation
+
+- [disable-submit-until-required-fields-valid.md](disable-submit-until-required-fields-valid.md) — Disable a form's Submit button until every required field (radio selection, list selection, text input) has a value; add a bell() or error-flash keystroke backstop so users get immediate feedback if they try to submit with required fields empty.
+
+## Terminals
+
+- [terminal-input-channels-are-distinct.md](terminal-input-channels-are-distinct.md) — Treat drag-and-drop and Ctrl+V as separate input channels with different delivery paths; terminal emulator behavior varies by OS and version, so test both paths independently instead of assuming they work identically.
+
+## Dependencies
+
+- [inspect-framework-source-before-tuning-css.md](inspect-framework-source-before-tuning-css.md) — When CSS properties appear dead (e.g., text-wrap: wrap on truncated widgets), inspect the underlying widget's source code for hardcoded constraints before assuming the CSS is correct; framework limitations often require architectural workarounds.
+- [verify-upgrade-path-before-rewrite.md](verify-upgrade-path-before-rewrite.md) — Before building a custom widget to replace a buggy framework control, verify the installed version is not outdated and check if upstream made it worse, not better; if so, accept that a code change is necessary.

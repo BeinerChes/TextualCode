@@ -24,6 +24,7 @@ from typing import Iterable
 import anyio
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
+from textual.reactive import reactive
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header
@@ -75,6 +76,12 @@ class TextualCodeApp(App):
         ("ctrl+t", "toggle_stats", "Stats"),
         ("escape", "interrupt", "Interrupt"),
     ]
+
+    # Compact density (tighter conversation spacing + borderless input/dialogs).
+    # On by default; a future Settings page will flip this. init=False so it is
+    # applied explicitly in on_mount (after the widgets exist) rather than during
+    # early mount — see _apply_compact.
+    compact: reactive[bool] = reactive(True, init=False)
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
@@ -147,6 +154,7 @@ class TextualCodeApp(App):
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_ctl.parse_command)
         self._commands.register("harvest", self._harvest_command)
+        self._apply_compact(self.compact)
         await self._conversation.add_markdown(WELCOME)
         self.query_one(PromptInput).focus()
         self.connect_agent()
@@ -175,6 +183,16 @@ class TextualCodeApp(App):
 
     async def _toggle_stats_command(self, arg: str) -> None:
         self.action_toggle_stats()
+
+    def watch_compact(self, compact: bool) -> None:
+        """React to a compact change (e.g. from the future Settings page).
+        init=False, so this never runs before on_mount applies the initial state."""
+        self._apply_compact(compact)
+
+    def _apply_compact(self, compact: bool) -> None:
+        """Apply compact density to the conversation and prompt input."""
+        self._conversation.set_class(compact, "compact")
+        self.query_one(PromptInput).compact = compact
 
     async def _harvest_command(self, arg: str) -> None:
         self.harvest_now()

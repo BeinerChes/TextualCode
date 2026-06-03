@@ -6,8 +6,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
+from rich.markup import escape
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, RadioButton, RadioSet, SelectionList, Static
 from textual.widgets.selection_list import Selection
@@ -15,10 +18,135 @@ from textual.widgets.selection_list import Selection
 from .permissions import Decision
 
 
-def _option_label(option: dict) -> str:
-    label = option.get("label", "")
-    desc = option.get("description", "")
-    return f"{label} — {desc}" if desc else str(label)
+class _ChoiceRow(Static):
+    """One wrapping option row inside a `ChoiceList`."""
+
+    def __init__(self, index: int, markup: str) -> None:
+        super().__init__(markup, classes="choice-row")
+        self.index = index
+
+    def on_click(self) -> None:
+        # Bubble the index up; the owning ChoiceList focuses + selects.
+        self.post_message(ChoiceList.RowClicked(self.index))
+
+
+class ChoiceList(Vertical, can_focus=True):
+    """Keyboard/mouse selectable list whose option text WRAPS.
+
+    Replaces `RadioSet`/`SelectionList` for long option text. Those Textual
+    widgets are single-line by design: `RadioButton` hardcodes a content height
+    of 1 and keeps only the label's first line, and `OptionList`'s `wrap`
+    parameter became a no-op in Textual 1.0 (wrapped text also corrupts its
+    indexing — upstream issue #5326). Each row here is a `Static`, which wraps
+    when its width is constrained. Verified against installed Textual 8.2.7.
+
+    Single-select mimics a radio group (at most one selection); multi-select
+    toggles each row independently like a checkbox list.
+    """
+
+    BINDINGS = [
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("space,enter", "toggle", "Toggle", show=False),
+    ]
+
+    class Changed(Message):
+        """Posted when the selection changes."""
+
+        def __init__(self, choice_list: "ChoiceList") -> None:
+            super().__init__()
+            self.choice_list = choice_list
+
+    class RowClicked(Message):
+        """Internal: a row was clicked (carries its index)."""
+
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
+    def __init__(
+        self,
+        options: list[dict],
+        *,
+        multiple: bool,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(id=id, classes=classes)
+        self._options = options
+        self._multiple = multiple
+        self._highlight = 0 if options else -1
+        self._selected: set[int] = set()
+
+    def compose(self) -> ComposeResult:
+        for index in range(len(self._options)):
+            yield _ChoiceRow(index, self._row_markup(index))
+
+    def on_mount(self) -> None:
+        self._sync()
+
+    # --- rendering -------------------------------------------------------
+    def _row_markup(self, index: int) -> str:
+        option = self._options[index]
+        label = escape(str(option.get("label", "")))
+        desc = escape(str(option.get("description", "")))
+        selected = index in self._selected
+        if self._multiple:
+            marker = "\\[[b]x[/b]]" if selected else "\\[ ]"
+        else:
+            marker = "(•)" if selected else "( )"
+        head = f"{marker} [b]{label}[/b]" if label else marker
+        return f"{head} — {desc}" if desc else head
+
+    def _sync(self) -> None:
+        for index, row in enumerate(self.query(_ChoiceRow)):
+            row.update(self._row_markup(index))
+            row.set_class(index == self._highlight, "-highlight")
+
+    # --- interaction -----------------------------------------------------
+    def action_cursor_up(self) -> None:
+        if not self._options:
+            return
+        self._highlight = (self._highlight - 1) % len(self._options)
+        self._sync()
+        self._scroll_to_highlight()
+
+    def action_cursor_down(self) -> None:
+        if not self._options:
+            return
+        self._highlight = (self._highlight + 1) % len(self._options)
+        self._sync()
+        self._scroll_to_highlight()
+
+    def action_toggle(self) -> None:
+        if self._highlight < 0:
+            return
+        if self._multiple:
+            if self._highlight in self._selected:
+                self._selected.discard(self._highlight)
+            else:
+                self._selected.add(self._highlight)
+        else:
+            self._selected = {self._highlight}
+        self._sync()
+        self.post_message(self.Changed(self))
+
+    def on_choice_list_row_clicked(self, event: "ChoiceList.RowClicked") -> None:
+        event.stop()
+        self.focus()
+        self._highlight = event.index
+        self.action_toggle()
+
+    def _scroll_to_highlight(self) -> None:
+        rows = list(self.query(_ChoiceRow))
+        if 0 <= self._highlight < len(rows):
+            rows[self._highlight].scroll_visible()
+
+    # --- state for the form ---------------------------------------------
+    def selected_labels(self) -> list[str]:
+        return [
+            str(self._options[i].get("label", "")) for i in sorted(self._selected)
+        ]
 
 
 class PermissionDialog(ModalScreen[Decision]):
@@ -139,6 +267,7 @@ class ToolSelector(ModalScreen[list[str] | None]):
                     for name in self._all_tools
                 ],
                 id="tool-list",
+                compact=bool(getattr(self.app, "compact", False)),
             )
             with Horizontal(id="dlg-buttons"):
                 yield Button("Save (s)", variant="success", id="save")
@@ -183,23 +312,19 @@ class QuestionForm(ModalScreen[dict | None]):
                     header = q.get("header", "")
                     text = q.get("question", "")
                     yield Static(f"[b]{header}[/b]  {text}".strip(), classes="q-text")
-                    options = q.get("options", [])
-                    if q.get("multiSelect"):
-                        yield SelectionList[str](
-                            *[
-                                Selection(_option_label(o), o.get("label", ""))
-                                for o in options
-                            ],
-                            id=f"q-{index}",
-                            classes="q-input",
-                        )
-                    else:
-                        with RadioSet(id=f"q-{index}", classes="q-input"):
-                            for o in options:
-                                yield RadioButton(_option_label(o))
+                    yield ChoiceList(
+                        q.get("options", []),
+                        multiple=bool(q.get("multiSelect")),
+                        id=f"q-{index}",
+                        classes="q-choices",
+                    )
             with Horizontal(id="dlg-buttons"):
                 yield Button("Submit (Ctrl+S)", variant="success", id="submit")
                 yield Button("Cancel", variant="default", id="cancel")
+
+    def on_mount(self) -> None:
+        # Nothing is selected yet, so Submit starts disabled (see _all_answered).
+        self._refresh_submit_enabled()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
@@ -207,17 +332,37 @@ class QuestionForm(ModalScreen[dict | None]):
         else:
             self.dismiss(None)
 
+    # A selection in any question may complete (or un-complete) the form, so
+    # re-evaluate the Submit button's enabled state on every change.
+    def on_choice_list_changed(self, event: ChoiceList.Changed) -> None:
+        self._refresh_submit_enabled()
+
+    def _all_answered(self) -> bool:
+        """True only when every question has at least one selection."""
+        for index in range(len(self._questions)):
+            widget = self.query_one(f"#q-{index}", ChoiceList)
+            if not widget.selected_labels():
+                return False
+        return True
+
+    def _refresh_submit_enabled(self) -> None:
+        self.query_one("#submit", Button).disabled = not self._all_answered()
+
     def action_submit(self) -> None:
+        # Keyboard backstop: the Submit button is disabled while incomplete, but
+        # the ctrl+s binding routes here directly, so guard the empty case too.
+        if not self._all_answered():
+            self.app.bell()
+            return
         answers: dict = {}
         for index, q in enumerate(self._questions):
             qtext = q.get("question", "")
-            options = q.get("options", [])
-            widget = self.query_one(f"#q-{index}")
+            widget = self.query_one(f"#q-{index}", ChoiceList)
+            labels = widget.selected_labels()
             if q.get("multiSelect"):
-                answers[qtext] = list(widget.selected)  # type: ignore[attr-defined]
+                answers[qtext] = labels
             else:
-                idx = widget.pressed_index  # type: ignore[attr-defined]
-                answers[qtext] = options[idx].get("label", "") if 0 <= idx < len(options) else ""
+                answers[qtext] = labels[0] if labels else ""
         self.dismiss(answers)
 
     def action_cancel(self) -> None:
@@ -241,7 +386,7 @@ class ModelSelector(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static("🧠 [b]Choose model[/b] — Select (s) · Esc cancels", id="dlg-title")
-            with RadioSet(id="model-set"):
+            with RadioSet(id="model-set", compact=bool(getattr(self.app, "compact", False))):
                 for model in self._models:
                     name = model.get("displayName", model["value"])
                     desc = model.get("description", "")

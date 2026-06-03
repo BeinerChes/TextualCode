@@ -17,6 +17,26 @@
     color: $text-muted;
 }
 
+/* The gutter is fixed-width; the content must take the remaining space.
+   Without this the Markdown sizes to its content's natural width inside the
+   Horizontal row, so long lines overflow to the right and get clipped under
+   the scrollbar instead of wrapping. */
+.msg-row > Markdown {
+    width: 1fr;
+}
+
+/* Compact density — toggled at runtime by the App `compact` reactive (F2 or
+   /compact), which adds the `.compact` class to #conversation. Drops the
+   per-row blank lines and tightens header spacing; messages stay separated by
+   the Markdown paragraph's own trailing margin. */
+#conversation.compact .msg-row {
+    margin: 0;
+}
+
+#conversation.compact MarkdownHeader {
+    margin: 1 0 0 0;
+}
+
 #sidebar {
     width: 36;
     height: 1fr;
@@ -151,6 +171,46 @@ PermissionDialog {
     max-height: 8;
     width: 1fr;
     margin: 0 0 1 0;
+}
+
+/* Short-label lists (ModelSelector / ToolSelector). RadioButton and
+   SelectionList are single-line by design in Textual 8.2.7 (RadioButton
+   hardcodes height=1 + first-line-only label; OptionList's `wrap` is a no-op
+   since Textual 1.0), so these only bound width — they cannot wrap. The
+   AskUserQuestion dialog uses ChoiceList (below) for long, wrapping options. */
+#dialog RadioButton {
+    width: 1fr;
+    height: auto;
+}
+
+/* ChoiceList: wrapping option rows for the AskUserQuestion dialog. */
+.q-choices {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
+    border: tall $border-blurred;
+    background: $surface;
+}
+
+.q-choices:focus {
+    border: tall $border;
+}
+
+.q-choices .choice-row {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+/* Highlighted (cursor) row — dim when unfocused, full cursor when focused. */
+.q-choices .choice-row.-highlight {
+    background: $block-cursor-blurred-background;
+}
+
+.q-choices:focus .choice-row.-highlight {
+    color: $block-cursor-foreground;
+    background: $block-cursor-background;
+    text-style: $block-cursor-text-style;
 }
 
 #dlg-buttons {
