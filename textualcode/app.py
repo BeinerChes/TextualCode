@@ -37,6 +37,7 @@ from .config import (
 )
 from .errors import report_error
 from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
+from .status import StatusPresenter, StatsView
 from .harvest import Harvester
 from .lessons import write_harvest
 from .permissions import Decision, describe_key, similarity_key
@@ -121,6 +122,9 @@ class TextualCodeApp(App):
         self._stats_panel: StatsPanel
         self._task_panel: TaskPanel
         self._thinking: ThinkingBar
+        # Presenters — constructed here; StatsView.render() only safe after on_mount.
+        self._status = StatusPresenter(self)
+        self._stats_view = StatsView(self)
 
     # ------------------------------------------------------------------ UI --
     def compose(self) -> ComposeResult:
@@ -136,12 +140,12 @@ class TextualCodeApp(App):
 
     async def on_mount(self) -> None:
         self.title = "TextualCode"
-        self.sub_title = "connecting…"
+        self._status.set_phase("connecting…")
         self._conversation = self.query_one(ConversationView)
         self._stats_panel = self.query_one(StatsPanel)
         self._task_panel = self.query_one(TaskPanel)
         self._thinking = self.query_one(ThinkingBar)
-        self._stats_panel.show(self._stats, self._model_label, self._last_context)
+        self._stats_view.render()
         self._renderer = MessageRenderer(self._conversation, self._settings)
         self._commands.register("model", self.switch_model)
         self._commands.register("stats", self._toggle_stats_command)
@@ -330,8 +334,8 @@ class TextualCodeApp(App):
         self._model_label = value
         self._project.model = value
         self._project.save(self._project_dir)
-        self.sub_title = f"agent sdk · {value}"
-        self._stats_panel.show(self._stats, value, self._last_context)
+        self._status.set_phase()
+        self._stats_view.render()
         display = next(
             (m.get("displayName") for m in models if str(m.get("value")) == value), value
         )
@@ -349,10 +353,10 @@ class TextualCodeApp(App):
         try:
             await self._agent.connect()
             self._models = self._agent.available_models()
-            self.sub_title = f"agent sdk · {self._model_label}"
+            self._status.set_phase()
             self.message_pump()  # start reading the message stream
         except Exception as exc:  # noqa: BLE001 - surface startup failures
-            self.sub_title = "offline"
+            self._status.set_phase("offline")
             await report_error(
                 self._conversation, None, exc,
                 message=(
@@ -365,17 +369,17 @@ class TextualCodeApp(App):
     async def reconnect_agent(self) -> None:
         tools = self._agent.tools
         desc = "all" if tools is None else ("none" if not tools else f"{len(tools)} selected")
-        self.sub_title = "reconnecting…"
+        self._status.set_phase("reconnecting…")
         try:
             await self._agent.reconnect()
             self.message_pump()  # rebind the pump to the new client
-            self.sub_title = f"agent sdk · {self._model_label}"
+            self._status.set_phase()
             await self._conversation.add_markdown(
                 f"> ↻ Reconnected · system tools: **{desc}** "
                 "(new session — conversation reset)."
             )
         except Exception as exc:  # noqa: BLE001 - surface reconnect failures
-            self.sub_title = "offline"
+            self._status.set_phase("offline")
             await report_error(self._conversation, "Reconnect failed:", exc)
 
     @work(exclusive=True, group=CONNECT)
@@ -386,20 +390,20 @@ class TextualCodeApp(App):
         Also clears the local transcript and cached context fill so the next
         harvest reflects only the new session. The on-screen log is untouched.
         """
-        self.sub_title = "restarting…"
+        self._status.set_phase("restarting…")
         try:
             await self._agent.reconnect()  # disconnect + connect = empty context
             self.message_pump()            # rebind the pump to the new client
             self._transcript.clear()
             self._last_context = None
-            self._stats_panel.show(self._stats, self._model_label, self._last_context)
-            self.sub_title = f"agent sdk · {self._model_label}"
+            self._stats_view.render()
+            self._status.set_phase()
             await self._conversation.add_markdown(
                 "> ↻ **Session restarted** — context window cleared. The agent "
                 "starts fresh; reference `state.md` to restore where we left off."
             )
         except Exception as exc:  # noqa: BLE001 - surface restart failures
-            self.sub_title = "offline"
+            self._status.set_phase("offline")
             await report_error(self._conversation, "Restart failed:", exc)
 
     @work(exclusive=True, group=PUMP)
@@ -467,13 +471,13 @@ class TextualCodeApp(App):
                 self._renderer.main_models,
                 self._turn_subagent_tokens,
             )
-        self.sub_title = f"agent sdk · {self._model_label}"
+        self._status.set_phase()
         self.refresh_context()
 
     @work(exclusive=True, group=STATS)
     async def refresh_context(self) -> None:
         self._last_context = await self._agent.context_usage()
-        self._stats_panel.show(self._stats, self._model_label, self._last_context)
+        self._stats_view.render()
 
     @work(exclusive=True, group=TOOLS_UI)
     async def open_model_selector(self) -> None:
