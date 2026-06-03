@@ -26,13 +26,30 @@ uv tool install --force $Pkg
 uv tool update-shell *> $null
 
 # 3. Runtime prerequisites (the Claude Agent SDK shells out to these).
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-  Warn "WARNING: 'claude' CLI not found. tcode needs it at runtime:"
-  Warn "         npm install -g @anthropic-ai/claude-code"
-}
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Warn "WARNING: Node.js not found (required by the Claude Agent SDK). Install Node 18+."
+#    Get-Command reads the real Windows PATH, but a freshly-installed tool may
+#    not be on this session's PATH yet, so also probe well-known locations.
+function Test-Dep($name, $paths) {
+  if (Get-Command $name -ErrorAction SilentlyContinue) { return $true }
+  foreach ($p in $paths) { if ($p -and (Test-Path $p)) { return $true } }
+  return $false
 }
 
+$missing = @()
+if (-not (Test-Dep "claude" @(
+    "$env:USERPROFILE\.local\bin\claude.exe",
+    "$env:USERPROFILE\.local\bin\claude",
+    "$env:APPDATA\npm\claude.cmd"))) { $missing += "claude" }
+if (-not (Test-Dep "node" @(
+    "$env:ProgramFiles\nodejs\node.exe",
+    "${env:ProgramFiles(x86)}\nodejs\node.exe",
+    "$env:LOCALAPPDATA\Volta\bin\node.exe"))) { $missing += "node" }
+
 Write-Host ""
-Info "tcode installed. Open a NEW terminal, cd into any project, and run:  tcode"
+Info "tcode installed."
+if ($missing.Count -gt 0) {
+  Warn "   Note: couldn't confirm in this session: $($missing -join ', ')"
+  Warn "   tcode needs Node 18+ and the claude CLI at runtime. Verify with:"
+  Warn "       node --version  ;  claude --version"
+  Warn "   If genuinely missing: install Node 18+; npm i -g @anthropic-ai/claude-code"
+}
+Info "   Open a NEW terminal, cd into any project, and run:  tcode"
