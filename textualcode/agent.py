@@ -58,8 +58,14 @@ class AgentSession:
             # None = full built-in set; [] = none; [names] = exactly those.
             tools=self.tools,
             strict_mcp_config=True,  # don't pull in ambient project/global MCP servers
-            setting_sources=[],      # ignore ~/.claude & project settings, incl. their
-                                     # permissions.allow rules — our dialog is authoritative
+            # "user" + "project" load global + project settings — REQUIRED for the
+            # SDK to inject CLAUDE.md as memory. Per the SDK's "what subagents
+            # inherit" table, subagents pick up Project CLAUDE.md from this same
+            # setting (Explore/Plan are the only built-ins that skip it).
+            # Trade-off: this also re-enables filesystem permissions.allow / hooks,
+            # so our can_use_tool dialog is no longer the *sole* gate — allow-rules
+            # in those settings can auto-approve tools before the dialog is asked.
+            setting_sources=["user", "project"],
             can_use_tool=self._approve_tool,
         )
         client = ClaudeSDKClient(options=options)
@@ -88,6 +94,15 @@ class AgentSession:
     async def submit(self, prompt: str) -> None:
         """Send a prompt. Responses arrive on the `messages()` stream."""
         await self._require_client().query(prompt)
+
+    async def interrupt(self) -> None:
+        """Interrupt the in-flight turn (the Esc key, like Claude Code).
+
+        Sends an interrupt signal to the CLI; the turn ends and a ResultMessage
+        arrives on `messages()`. Streaming mode only (which is what we use).
+        Non-destructive: the conversation/session is preserved.
+        """
+        await self._require_client().interrupt()
 
     async def messages(self) -> AsyncIterator[Message]:
         """Continuous stream of ALL session messages (responses + task events).

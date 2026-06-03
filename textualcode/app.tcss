@@ -18,7 +18,7 @@
 }
 
 #sidebar {
-    width: 34;
+    width: 36;
     height: 1fr;
 }
 
@@ -64,15 +64,29 @@ Markdown {
     margin: 0;
 }
 
+/* The grouped run of tool calls: one compact line when collapsed. */
+.tool-group {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+.tool-group > CollapsibleTitle {
+    color: $text-muted;
+    text-style: bold;
+}
+
+/* Individual tool cards live inside an expanded group — keep them tight. */
 .tool {
     margin: 0;
-    border: round $primary 40%;
-    background: $boost;
+    padding: 0;
+    border: none;
+    background: transparent;
 }
 
 .tool > CollapsibleTitle {
     color: $text-muted;
-    text-style: bold;
 }
 
 #thinking {
@@ -83,6 +97,8 @@ Markdown {
 #prompt {
     dock: bottom;
     margin: 1 2;
+    height: 3;       /* initial; PromptScreen auto-grows this with content */
+    max-height: 12;  /* MAX_LINES (10) + top/bottom border */
 }
 
 PermissionDialog {

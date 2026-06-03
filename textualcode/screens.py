@@ -72,6 +72,47 @@ class PermissionDialog(ModalScreen[Decision]):
         self.dismiss(Decision(allow=False))
 
 
+class ConfirmDialog(ModalScreen[bool]):
+    """A generic yes/no confirmation. Dismisses with True (confirm) / False."""
+
+    BINDINGS = [
+        ("y", "confirm", "Yes"),
+        ("n", "cancel", "No"),
+        ("escape", "cancel", "No"),
+    ]
+
+    def __init__(
+        self,
+        title: str,
+        message: str,
+        *,
+        confirm_label: str = "Yes (y)",
+        cancel_label: str = "No (n)",
+    ) -> None:
+        super().__init__()
+        self._title = title
+        self._message = message
+        self._confirm_label = confirm_label
+        self._cancel_label = cancel_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(self._title, id="dlg-title")
+            yield Static(self._message, id="dlg-body")
+            with Horizontal(id="dlg-buttons"):
+                yield Button(self._confirm_label, variant="success", id="confirm")
+                yield Button(self._cancel_label, variant="default", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class ToolSelector(ModalScreen[list[str] | None]):
     """Pick which built-in tools are enabled. Dismisses with the selected list,
     or None if cancelled."""

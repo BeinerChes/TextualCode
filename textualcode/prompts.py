@@ -8,7 +8,7 @@ still being easy to tweak in one place, away from the orchestration logic.
 
 from __future__ import annotations
 
-# Drives the ⟳ compact / `/compact` harvester (textualcode.harvest.Harvester).
+# Drives the ⟳ harvest / `/harvest` harvester (textualcode.harvest.Harvester).
 # Forces a single JSON object so we can parse it deterministically; the model is
 # told to MAP the session, not summarize it.
 EXTRACTION_PROMPT = """\

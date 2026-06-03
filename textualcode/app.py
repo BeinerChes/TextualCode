@@ -24,7 +24,7 @@ from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input
+from textual.widgets import Footer, Header
 
 from .agent import AgentSession
 from .commands import CommandRouter, UnknownCommand
@@ -40,7 +40,13 @@ from .lessons import write_harvest
 from .permissions import Decision, describe_key, similarity_key
 from .renderer import MessageRenderer
 from .transcript import Transcript
-from .screens import ModelSelector, PermissionDialog, QuestionForm, ToolSelector
+from .screens import (
+    ConfirmDialog,
+    ModelSelector,
+    PermissionDialog,
+    QuestionForm,
+    ToolSelector,
+)
 from .stats import UsageStats
 from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
 
@@ -71,9 +77,13 @@ def _task_key(message) -> str:
 class TextualCodeApp(App):
     CSS_PATH = "app.tcss"
     BINDINGS = [
-        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+c", "request_quit", "Quit"),
         ("ctrl+t", "toggle_stats", "Stats"),
+        ("escape", "interrupt", "Interrupt"),
     ]
+
+    # Window (seconds) during which a second Ctrl+C confirms quit.
+    _QUIT_WINDOW = 3.0
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
@@ -92,7 +102,17 @@ class TextualCodeApp(App):
         self._stats = UsageStats()
         self._transcript = Transcript()
         self._last_context: dict | None = None
+        # Σ total_tokens from Task notifications since the current turn began —
+        # the only first-class subagent signal (no cost). Fed to stats.add_turn
+        # to split spend; reset each submit. See stats.UsageStats.add_turn.
+        self._turn_subagent_tokens = 0
         self._models: list[dict] = []  # populated after connect
+        self._quit_armed = False  # True while the "press again" window is open
+        self._quit_timer = None
+        # True only while a real agent turn is in flight (submit → ResultMessage).
+        # Distinguishes an interruptible turn from a /harvest, which also animates
+        # the ThinkingBar but runs an isolated client. Esc only interrupts a turn.
+        self._agent_turn_active = False
         # Set in on_mount once the widgets exist.
         self._conversation: ConversationView
         self._renderer: MessageRenderer
@@ -124,10 +144,41 @@ class TextualCodeApp(App):
         self._commands.register("model", self.switch_model)
         self._commands.register("stats", self._toggle_stats_command)
         self._commands.register("tools", self._tools_command)
-        self._commands.register("compact", self._harvest_command)
+        self._commands.register("harvest", self._harvest_command)
         await self._conversation.add_markdown(WELCOME)
-        self.query_one("#prompt", Input).focus()
+        self.query_one(PromptInput).focus()
         self.connect_agent()
+
+    def action_request_quit(self) -> None:
+        """Claude-Code-style quit: the first Ctrl+C arms a short confirm window
+        and shows a hint; a second Ctrl+C within the window actually exits.
+
+        This keeps a stray Ctrl+C (e.g. a terminal copy) from killing the app.
+        """
+        if self._quit_armed:
+            self.exit()
+            return
+        self._quit_armed = True
+        if not self._thinking.show_notice("[yellow]Press Ctrl+C again to exit[/yellow]"):
+            # ThinkingBar is busy animating — fall back to a toast.
+            self.notify("Press Ctrl+C again to exit", severity="warning", timeout=self._QUIT_WINDOW)
+        self._quit_timer = self.set_timer(self._QUIT_WINDOW, self._disarm_quit)
+
+    def _disarm_quit(self) -> None:
+        self._quit_armed = False
+        self._quit_timer = None
+        self._thinking.clear_notice()
+
+    def action_interrupt(self) -> None:
+        """Esc: interrupt the in-flight turn, like Claude Code.
+
+        No-op when the agent isn't working, so a stray Esc does nothing. Esc
+        bubbles up from the focused PromptInput because its `tab_behavior` is
+        "focus" (TextArea only consumes Esc under "indent").
+        """
+        if not self._agent_turn_active:
+            return
+        self.interrupt_agent()
 
     def action_toggle_stats(self) -> None:
         self._stats_panel.display = not self._stats_panel.display
@@ -139,7 +190,7 @@ class TextualCodeApp(App):
         self.harvest_now()
 
     def action_harvest(self) -> None:
-        """Action target for the clickable '⟳ compact' link in the stats panel."""
+        """Action target for the clickable '⟳ harvest' link in the stats panel."""
         self.harvest_now()
 
     async def _tools_command(self, arg: str) -> None:
@@ -227,11 +278,11 @@ class TextualCodeApp(App):
         )
 
     # ------------------------------------------------------------- handlers --
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
-        self.query_one("#prompt", Input).value = ""
+        self.query_one(PromptInput).value = ""
 
         if text.startswith("/"):
             try:
@@ -321,6 +372,32 @@ class TextualCodeApp(App):
                 f"> **Reconnect failed:** {type(exc).__name__}: {exc}"
             )
 
+    @work(exclusive=True, group="connect")
+    async def restart_session(self) -> None:
+        """Free the context window: tear down the SDK client and start a fresh
+        session (the supported reset — there's no in-process clear API yet).
+
+        Also clears the local transcript and cached context fill so the next
+        harvest reflects only the new session. The on-screen log is untouched.
+        """
+        self.sub_title = "restarting…"
+        try:
+            await self._agent.reconnect()  # disconnect + connect = empty context
+            self.message_pump()            # rebind the pump to the new client
+            self._transcript.clear()
+            self._last_context = None
+            self._stats_panel.show(self._stats, self._model_label, self._last_context)
+            self.sub_title = f"agent sdk · {self._model_label}"
+            await self._conversation.add_markdown(
+                "> ↻ **Session restarted** — context window cleared. The agent "
+                "starts fresh; reference `state.md` to restore where we left off."
+            )
+        except Exception as exc:  # noqa: BLE001 - surface restart failures
+            self.sub_title = "offline"
+            await self._conversation.add_markdown(
+                f"> **Restart failed:** {type(exc).__name__}: {exc}"
+            )
+
     @work(exclusive=True, group="pump")
     async def message_pump(self) -> None:
         """Single long-lived reader of the SDK message stream.
@@ -346,6 +423,9 @@ class TextualCodeApp(App):
             return
         if isinstance(message, TaskNotificationMessage):
             self._log_task(message)
+            # Accumulate the subagent's token spend for this turn's cost split.
+            if message.usage:
+                self._turn_subagent_tokens += int(message.usage.get("total_tokens", 0) or 0)
             # One notification ends the whole task → finish every card under it.
             await self._task_panel.finish_task(message.task_id, message.status, message.summary)
             return
@@ -373,9 +453,16 @@ class TextualCodeApp(App):
             pass
 
     def _on_turn_complete(self) -> None:
+        self._agent_turn_active = False
         self._thinking.stop()
         if self._renderer.last_usage is not None or self._renderer.last_cost is not None:
-            self._stats.add_turn(self._renderer.last_usage, self._renderer.last_cost)
+            self._stats.add_turn(
+                self._renderer.last_usage,
+                self._renderer.last_cost,
+                self._renderer.last_model_usage,
+                self._renderer.main_models,
+                self._turn_subagent_tokens,
+            )
         self.sub_title = f"agent sdk · {self._model_label}"
         self.refresh_context()
 
@@ -413,13 +500,36 @@ class TextualCodeApp(App):
     async def send_to_agent(self, text: str) -> None:
         """Submit the prompt; the message pump renders the streamed response."""
         self._thinking.start()
+        self._agent_turn_active = True
         self._renderer.last_cost = None
         self._renderer.last_usage = None
+        self._renderer.last_model_usage = None
+        self._turn_subagent_tokens = 0
         try:
             await self._agent.submit(text)
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
+            self._agent_turn_active = False
             self._thinking.stop()
             await self._conversation.add_markdown(f"> **Error:** {type(exc).__name__}: {exc}")
+
+    @work(exclusive=True, group="interrupt")
+    async def interrupt_agent(self) -> None:
+        """Send the interrupt to the SDK and stop the thinking bar immediately.
+
+        The CLI ends the turn and a ResultMessage arrives on the pump (which
+        also calls `_on_turn_complete` → `stop()`), but we stop here too so the
+        UI reacts instantly to the keypress.
+        """
+        self._agent_turn_active = False  # don't let a second Esc re-fire
+        try:
+            await self._agent.interrupt()
+        except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
+            await self._conversation.add_markdown(
+                f"> **Interrupt failed:** {type(exc).__name__}: {exc}"
+            )
+            return
+        self._thinking.stop()
+        await self._conversation.add_markdown("> ⏹ Interrupted.")
 
     @work(exclusive=True, group="harvest")
     async def harvest_now(self) -> None:
@@ -434,9 +544,13 @@ class TextualCodeApp(App):
             )
             return
         await self._conversation.add_markdown("> ⟳ Harvesting this session with Haiku…")
+        # Cold-starting an isolated Haiku client takes 15-30s with no streamed
+        # output; show the animated bar so the harvest doesn't look frozen.
+        self._thinking.start(label="Harvesting")
         try:
             result = await Harvester(model="haiku").run(self._transcript.render())
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
+            self._thinking.stop()
             await self._conversation.add_markdown(
                 f"> **Harvest failed:** {type(exc).__name__}: {exc}"
             )
@@ -444,16 +558,33 @@ class TextualCodeApp(App):
         try:
             paths = write_harvest(self._project_dir, result)
         except Exception as exc:  # noqa: BLE001 - report write failures cleanly
+            self._thinking.stop()
             await self._conversation.add_markdown(
                 f"> **Could not write harvest files:** {type(exc).__name__}: {exc}"
             )
             return
+        self._thinking.stop()
         cost = f" · ${result.cost:.4f}" if result.cost else ""
         added = len(paths.new_lessons)
         lessons_note = f", +{added} lesson(s)" if added else ""
         await self._conversation.add_markdown(
             f"> ✅ Harvested → `{paths.root.name}/state.md`{lessons_note}{cost}."
         )
+        # Offer to free the context window by restarting the SDK session. This
+        # runs in a worker, so push_screen_wait is safe (unlike the SDK-callback
+        # dialogs, which must use push_screen + Future).
+        restart = await self.push_screen_wait(
+            ConfirmDialog(
+                "↻ Restart session?",
+                "Harvest saved. Restart the agent session to clear the context "
+                "window? The agent starts fresh from an empty context; this "
+                "on-screen log stays. (Your saved state.md seeds the next run.)",
+                confirm_label="Restart (y)",
+                cancel_label="Keep session (n)",
+            )
+        )
+        if restart:
+            self.restart_session()
 
     @work(group="agent")
     async def _switch_model_worker(self, name: str) -> None:

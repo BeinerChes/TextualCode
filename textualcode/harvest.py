@@ -1,6 +1,6 @@
 """Harvester: turn a session transcript into a structured MAP via a cheap model.
 
-This runs only as an EXPLICIT user action (the ⟳ compact button / `/compact`),
+This runs only as an EXPLICIT user action (the ⟳ harvest button / `/harvest`),
 so the single model call it makes is sanctioned spend. It uses the cheapest
 model (Haiku by default) and a throwaway, fully isolated SDK client — it never
 touches the live conversation session.
