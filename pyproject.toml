@@ -1,6 +1,6 @@
 [project]
 name = "textualcode"
-version = "0.2.0"
+version = "0.3.0"
 description = "A stub Claude-Code-style terminal UI built with Textual"
 readme = "README.md"
 requires-python = ">=3.11"
