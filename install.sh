@@ -33,13 +33,27 @@ uv tool install --force "$PKG" || die "Install failed."
 uv tool update-shell >/dev/null 2>&1 || true
 
 # 4. Runtime prerequisites (the Claude Agent SDK shells out to these).
+#
+# Resolve commands the way tcode will at runtime. On Windows this installer
+# usually runs in a git-bash subshell with a reduced PATH, but tcode.exe is a
+# native process that inherits the *Windows* PATH — so a plain `command -v`
+# here gives false "not found" warnings. Also ask Windows' own resolver
+# (cmd.exe `where`) when available, which reflects the PATH tcode actually sees.
+have() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  if command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c "where $1" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
 MISSING=0
-if ! command -v claude >/dev/null 2>&1; then
+if ! have claude; then
   warn "⚠  'claude' CLI not found. tcode needs it at runtime:"
   warn "     npm install -g @anthropic-ai/claude-code"
   MISSING=1
 fi
-if ! command -v node >/dev/null 2>&1; then
+if ! have node; then
   warn "⚠  Node.js not found (required by the Claude Agent SDK). Install Node 18+."
   MISSING=1
 fi
