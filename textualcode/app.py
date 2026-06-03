@@ -35,14 +35,12 @@ from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
 from .status import StatusPresenter, StatsView
 from .harvest import Harvester
 from .lessons import write_harvest
-from .permissions import Decision, describe_key, similarity_key
+from .modal_bridge import ModalBridge
 from .renderer import MessageRenderer
 from .transcript import Transcript
 from .screens import (
     ConfirmDialog,
     ModelSelector,
-    PermissionDialog,
-    QuestionForm,
     ToolSelector,
 )
 from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
@@ -78,10 +76,11 @@ class TextualCodeApp(App):
         self._project_dir = Path.cwd()
         self._project = ProjectConfig.load(self._project_dir)
         self._model_label = self._project.model
+        self._modal = ModalBridge(self)
         self._agent = AgentSession(
             self._settings,
-            permission_handler=self._ask_permission,
-            question_handler=self._ask_question,
+            permission_handler=self._modal.ask_permission,
+            question_handler=self._modal.ask_question,
             model=self._project.model,
             tools=self._project.tools,
         )
@@ -211,37 +210,6 @@ class TextualCodeApp(App):
         self._project.save(self._project_dir)
         self._agent.tools = tools
         self.reconnect_agent()
-
-    async def _ask_permission(self, tool_name: str, tool_input: dict) -> Decision:
-        """Show the approve/deny modal and wait for the user's choice.
-
-        Uses push_screen + a Future (not push_screen_wait) because the SDK calls
-        this from its own task, not a Textual worker.
-        """
-        future: asyncio.Future[Decision] = asyncio.get_running_loop().create_future()
-        label = describe_key(similarity_key(tool_name, tool_input))
-
-        def _resolve(result: Decision | None) -> None:
-            if not future.done():
-                future.set_result(result or Decision(allow=False))
-
-        self.push_screen(PermissionDialog(tool_name, tool_input, label), _resolve)
-        return await future
-
-    async def _ask_question(self, questions: list[dict]) -> dict | None:
-        """Show the AskUserQuestion form and return the answers (or None).
-
-        Same push_screen + Future bridge as _ask_permission (the SDK calls this
-        from its own task, not a Textual worker).
-        """
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        def _resolve(result: dict | None) -> None:
-            if not future.done():
-                future.set_result(result)
-
-        self.push_screen(QuestionForm(questions), _resolve)
-        return await future
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
