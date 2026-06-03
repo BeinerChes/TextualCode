@@ -3,17 +3,45 @@
 from __future__ import annotations
 
 import json
+import random
+from pathlib import Path
 
 from claude_agent_sdk import ToolUseBlock
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
+from textual import events
 from textual.containers import Horizontal, VerticalScroll
+from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Collapsible, Markdown, Static
+from textual.widgets import Collapsible, Input, Markdown, Static
 
 from .config import AGENT_ICON, USER_ICON
 from .stats import UsageStats
+
+
+class PromptInput(Input):
+    """The prompt box, with drag-and-drop / pasted file-path handling.
+
+    Terminals paste a (often quoted) file path when a file is dropped; this
+    strips the quotes, inserts the clean path, and announces the drop.
+    """
+
+    class FileDropped(Message):
+        def __init__(self, path: str) -> None:
+            super().__init__()
+            self.path = path
+
+    def _on_paste(self, event: events.Paste) -> None:
+        text = event.text
+        if text:
+            first = text.splitlines()[0].strip().strip('"').strip("'").strip()
+            if first and Path(first).is_file():
+                self.insert_text_at_cursor(first)
+                self.post_message(self.FileDropped(first))
+                event.stop()
+                return
+        super()._on_paste(event)
 
 
 class ConversationView(VerticalScroll):
@@ -45,6 +73,69 @@ class ConversationView(VerticalScroll):
         )
         await self.mount(row)
         self.scroll_end(animate=False)
+
+
+_GERUNDS = [
+    "Thinking", "Pondering", "Cogitating", "Prestidigitating", "Ruminating",
+    "Conjuring", "Percolating", "Marinating", "Noodling", "Finagling",
+    "Scheming", "Computing", "Brewing", "Simmering", "Sautéing", "Vibing",
+]
+_STARS = "✶✸✹✺✻✼"
+
+
+class ThinkingBar(Static):
+    """Animated 'agent is working' indicator: star + gerund + elapsed (+ tokens).
+
+    Shown from prompt-submit until the turn's ResultMessage. Local animation
+    only — no token cost.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._timer = None
+        self._ticks = 0
+        self._elapsed = 0
+        self._frame = 0
+        self._gerund = "Thinking"
+        self._tokens = 0
+
+    def on_mount(self) -> None:
+        self.display = False
+
+    def start(self) -> None:
+        self._ticks = self._elapsed = self._tokens = 0
+        self._gerund = random.choice(_GERUNDS)
+        self.display = True
+        if self._timer is None:
+            self._timer = self.set_interval(0.2, self._tick)
+        else:
+            self._timer.resume()
+        self._refresh()
+
+    def stop(self) -> None:
+        self.display = False
+        if self._timer is not None:
+            self._timer.pause()
+
+    def add_tokens(self, n: int) -> None:
+        self._tokens += n
+        self._refresh()
+
+    def _tick(self) -> None:
+        self._ticks += 1
+        self._frame = (self._frame + 1) % len(_STARS)
+        if self._ticks % 5 == 0:
+            self._elapsed += 1
+        if self._ticks % 25 == 0:
+            self._gerund = random.choice(_GERUNDS)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        tok = f" · ↓ {self._tokens} tokens" if self._tokens else ""
+        self.update(
+            f"[orange1]{_STARS[self._frame]} {self._gerund}…[/orange1] "
+            f"[dim]({self._elapsed}s{tok} · thinking)[/dim]"
+        )
 
 
 def _short(n: int) -> str:

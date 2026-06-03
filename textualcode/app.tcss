@@ -75,6 +75,11 @@ Markdown {
     text-style: bold;
 }
 
+#thinking {
+    height: 1;
+    padding: 0 2;
+}
+
 #prompt {
     dock: bottom;
     margin: 1 2;

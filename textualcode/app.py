@@ -38,7 +38,7 @@ from .permissions import Decision, describe_key, similarity_key
 from .renderer import MessageRenderer
 from .screens import ModelSelector, PermissionDialog, ToolSelector
 from .stats import UsageStats
-from .widgets import ConversationView, StatsPanel, TaskPanel
+from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
 
 WELCOME = """\
 # TextualCode
@@ -92,6 +92,7 @@ class TextualCodeApp(App):
         self._renderer: MessageRenderer
         self._stats_panel: StatsPanel
         self._task_panel: TaskPanel
+        self._thinking: ThinkingBar
 
     # ------------------------------------------------------------------ UI --
     def compose(self) -> ComposeResult:
@@ -101,7 +102,8 @@ class TextualCodeApp(App):
             with Vertical(id="sidebar"):
                 yield StatsPanel(id="stats")
                 yield TaskPanel(id="tasks")
-        yield Input(placeholder="Ask anything…", id="prompt")
+        yield ThinkingBar(id="thinking")
+        yield PromptInput(placeholder="Ask anything… (or drop a file)", id="prompt")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -110,6 +112,7 @@ class TextualCodeApp(App):
         self._conversation = self.query_one(ConversationView)
         self._stats_panel = self.query_one(StatsPanel)
         self._task_panel = self.query_one(TaskPanel)
+        self._thinking = self.query_one(ThinkingBar)
         self._stats_panel.show(self._stats, self._model_label, self._last_context)
         self._renderer = MessageRenderer(self._conversation, self._settings)
         self._commands.register("model", self.switch_model)
@@ -215,6 +218,12 @@ class TextualCodeApp(App):
             await self._conversation.add_markdown("> Agent not connected yet — try again in a moment.")
             return
         self.send_to_agent(text)
+
+    async def on_prompt_input_file_dropped(self, message: PromptInput.FileDropped) -> None:
+        name = Path(message.path).name
+        await self._conversation.add_markdown(
+            f"> 📎 Added `{name}` to the prompt — ask me to read or review it."
+        )
 
     async def switch_model(self, name: str) -> None:
         if not self._agent.connected:
@@ -332,6 +341,7 @@ class TextualCodeApp(App):
             pass
 
     def _on_turn_complete(self) -> None:
+        self._thinking.stop()
         if self._renderer.last_usage is not None or self._renderer.last_cost is not None:
             self._stats.add_turn(self._renderer.last_usage, self._renderer.last_cost)
         self.sub_title = f"agent sdk · {self._model_label}"
@@ -370,14 +380,14 @@ class TextualCodeApp(App):
     @work(exclusive=True, group="agent")
     async def send_to_agent(self, text: str) -> None:
         """Submit the prompt; the message pump renders the streamed response."""
-        self.sub_title = "thinking…"
+        self._thinking.start()
         self._renderer.last_cost = None
         self._renderer.last_usage = None
         try:
             await self._agent.submit(text)
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
+            self._thinking.stop()
             await self._conversation.add_markdown(f"> **Error:** {type(exc).__name__}: {exc}")
-            self.sub_title = f"agent sdk · {self._model_label}"
 
     @work(group="agent")
     async def _switch_model_worker(self, name: str) -> None:
