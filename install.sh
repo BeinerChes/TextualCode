@@ -34,31 +34,48 @@ uv tool update-shell >/dev/null 2>&1 || true
 
 # 4. Runtime prerequisites (the Claude Agent SDK shells out to these).
 #
-# Resolve commands the way tcode will at runtime. On Windows this installer
-# usually runs in a git-bash subshell with a reduced PATH, but tcode.exe is a
-# native process that inherits the *Windows* PATH — so a plain `command -v`
-# here gives false "not found" warnings. Also ask Windows' own resolver
-# (cmd.exe `where`) when available, which reflects the PATH tcode actually sees.
+# This check is best-effort. On Windows the installer runs in a git-bash
+# subshell whose PATH is a stripped subset of the real Windows PATH, and any
+# child process (where.exe, cmd.exe) inherits that same stripped PATH — so
+# `command -v` can't see tools that tcode.exe WILL find at runtime. We can't
+# read the live runtime PATH from here, so we additionally probe the well-known
+# install locations directly (filesystem checks work regardless of PATH).
 have() {
   command -v "$1" >/dev/null 2>&1 && return 0
-  if command -v cmd.exe >/dev/null 2>&1; then
-    cmd.exe /c "where $1" >/dev/null 2>&1 && return 0
-  fi
+  case "$1" in
+    node)
+      for p in \
+        "/c/Program Files/nodejs/node.exe" \
+        "/c/Program Files (x86)/nodejs/node.exe" \
+        "${ProgramFiles:-}/nodejs/node.exe" \
+        "${LOCALAPPDATA:-}/Volta/bin/node.exe"; do
+        [ -n "$p" ] && [ -e "$p" ] && return 0
+      done ;;
+    claude)
+      for p in \
+        "$HOME/.local/bin/claude" \
+        "$HOME/.local/bin/claude.exe" \
+        "${APPDATA:-}/npm/claude" \
+        "${APPDATA:-}/npm/claude.cmd" \
+        "$HOME/node_modules/.bin/claude"; do
+        [ -n "$p" ] && [ -e "$p" ] && return 0
+      done ;;
+  esac
   return 1
 }
 
-MISSING=0
-if ! have claude; then
-  warn "⚠  'claude' CLI not found. tcode needs it at runtime:"
-  warn "     npm install -g @anthropic-ai/claude-code"
-  MISSING=1
-fi
-if ! have node; then
-  warn "⚠  Node.js not found (required by the Claude Agent SDK). Install Node 18+."
-  MISSING=1
-fi
+MISSING=""
+have claude || MISSING="$MISSING claude"
+have node   || MISSING="$MISSING node"
 
 echo
 info "✅ tcode installed."
-[ "$MISSING" -eq 0 ] || warn "   Resolve the warnings above before first run."
+if [ -n "$MISSING" ]; then
+  warn "   Note: couldn't confirm from this installer shell:$MISSING"
+  warn "   (curl|bash runs in a subshell that may not see your full PATH —"
+  warn "    this is often a false alarm.) tcode needs Node 18+ and the claude"
+  warn "    CLI at runtime; verify in your normal terminal:"
+  warn "        node --version   &&   claude --version"
+  warn "    If genuinely missing: install Node 18+; npm i -g @anthropic-ai/claude-code"
+fi
 info "   Open a new terminal, cd into any project, and run:  tcode"
