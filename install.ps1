@@ -23,7 +23,11 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # 2. Install (or upgrade) the tcode command from GitHub.
 Info "Installing tcode from $OwnerRepo@$Ref ..."
 uv tool install --force $Pkg
-uv tool update-shell *> $null
+# Ensure the tool dir is on PATH. `update-shell` writes an informational line to
+# stderr when the dir is already present; under `$ErrorActionPreference="Stop"`
+# PowerShell 5.1 promotes that stderr to a terminating NativeCommandError that
+# `*> $null` alone does not swallow — so wrap it. This step is best-effort.
+try { uv tool update-shell *> $null } catch { }
 
 # 3. Runtime prerequisites (the Claude Agent SDK shells out to these).
 #    Get-Command reads the real Windows PATH, but a freshly-installed tool may
