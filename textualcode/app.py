@@ -1,8 +1,18 @@
-"""TextualCodeApp: the Textual application — wiring only.
+"""TextualCodeApp: the Textual application — composition root / wiring only.
 
-It composes the UI and connects three collaborators: an `AgentSession` (SDK),
-a `CommandRouter` (slash commands), and a `MessageRenderer` (display). Behaviour
-lives in those modules; this class just orchestrates them.
+It composes the UI and constructs the collaborators that hold the behaviour,
+keeping only ``compose()``, the ``on_mount`` wiring, the Textual
+``action_*``/message-handler entry points, and the thin ``@work`` worker shims.
+The collaborators:
+
+- ``AgentSession`` (SDK) + ``SessionController`` — connect/reconnect/restart.
+- ``MessageDispatcher`` + ``MessageRenderer`` — route and render the stream.
+- ``TurnAccountant`` — per-turn cost/usage accounting.
+- ``StatusPresenter`` / ``StatsView`` — the status line and stats panel.
+- ``ModalBridge`` — SDK permission/question dialogs.
+- ``ModelController`` / ``ToolsController`` — model + built-in-tools features.
+- ``HarvestController`` / ``QuitGuard`` — harvest flow and two-step quit.
+- ``CommandRouter`` — slash commands.
 """
 
 from __future__ import annotations
@@ -24,7 +34,6 @@ from .dispatcher import MessageDispatcher, TaskDebugLog
 from .commands import CommandRouter, UnknownCommand
 from .config import (
     BUILTIN_TOOLS,
-    DEFAULT_MODEL,
     ProjectConfig,
     Settings,
 )
