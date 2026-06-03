@@ -30,16 +30,15 @@ from .config import (
 )
 from .errors import report_error
 from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
+from .harvest_controller import HarvestController
 from .model_controller import ModelController
 from .tools_controller import ToolsController
+from .quit_guard import QuitGuard
 from .status import StatusPresenter, StatsView
-from .harvest import Harvester
-from .lessons import write_harvest
 from .modal_bridge import ModalBridge
 from .renderer import MessageRenderer
 from .transcript import Transcript
 from .screens import (
-    ConfirmDialog,
     ModelSelector,
     ToolSelector,
 )
@@ -67,9 +66,6 @@ class TextualCodeApp(App):
         ("escape", "interrupt", "Interrupt"),
     ]
 
-    # Window (seconds) during which a second Ctrl+C confirms quit.
-    _QUIT_WINDOW = 3.0
-
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
         self._settings = settings or Settings()
@@ -91,8 +87,8 @@ class TextualCodeApp(App):
         self._last_context: dict | None = None
         self._model_ctl = ModelController(self)
         self._tools_ctl = ToolsController(self)
-        self._quit_armed = False  # True while the "press again" window is open
-        self._quit_timer = None
+        self._harvest_ctl = HarvestController(self)
+        self._quit = QuitGuard(self)
         # True only while a real agent turn is in flight (submit → ResultMessage).
         # Distinguishes an interruptible turn from a /harvest, which also animates
         # the ThinkingBar but runs an isolated client. Esc only interrupts a turn.
@@ -150,19 +146,7 @@ class TextualCodeApp(App):
 
         This keeps a stray Ctrl+C (e.g. a terminal copy) from killing the app.
         """
-        if self._quit_armed:
-            self.exit()
-            return
-        self._quit_armed = True
-        if not self._thinking.show_notice("[yellow]Press Ctrl+C again to exit[/yellow]"):
-            # ThinkingBar is busy animating — fall back to a toast.
-            self.notify("Press Ctrl+C again to exit", severity="warning", timeout=self._QUIT_WINDOW)
-        self._quit_timer = self.set_timer(self._QUIT_WINDOW, self._disarm_quit)
-
-    def _disarm_quit(self) -> None:
-        self._quit_armed = False
-        self._quit_timer = None
-        self._thinking.clear_notice()
+        self._quit.request()
 
     def action_interrupt(self) -> None:
         """Esc: interrupt the in-flight turn, like Claude Code.
@@ -427,49 +411,7 @@ class TextualCodeApp(App):
         Non-destructive: writes `.claude/state.md` plus any new lessons under
         `.claude/lessons/`; the live conversation session is untouched.
         """
-        if self._transcript.empty:
-            await self._conversation.add_markdown(
-                "> Nothing to harvest yet — have a conversation first."
-            )
-            return
-        await self._conversation.add_markdown("> ⟳ Harvesting this session with Haiku…")
-        # Cold-starting an isolated Haiku client takes 15-30s with no streamed
-        # output; show the animated bar so the harvest doesn't look frozen.
-        self._thinking.start(label="Harvesting")
-        try:
-            result = await Harvester(model="haiku").run(self._transcript.render())
-        except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
-            self._thinking.stop()
-            await report_error(self._conversation, "Harvest failed:", exc)
-            return
-        try:
-            paths = write_harvest(self._project_dir, result)
-        except Exception as exc:  # noqa: BLE001 - report write failures cleanly
-            self._thinking.stop()
-            await report_error(self._conversation, "Could not write harvest files:", exc)
-            return
-        self._thinking.stop()
-        cost = f" · ${result.cost:.4f}" if result.cost else ""
-        added = len(paths.new_lessons)
-        lessons_note = f", +{added} lesson(s)" if added else ""
-        await self._conversation.add_markdown(
-            f"> ✅ Harvested → `{paths.root.name}/state.md`{lessons_note}{cost}."
-        )
-        # Offer to free the context window by restarting the SDK session. This
-        # runs in a worker, so push_screen_wait is safe (unlike the SDK-callback
-        # dialogs, which must use push_screen + Future).
-        restart = await self.push_screen_wait(
-            ConfirmDialog(
-                "↻ Restart session?",
-                "Harvest saved. Restart the agent session to clear the context "
-                "window? The agent starts fresh from an empty context; this "
-                "on-screen log stays. (Your saved state.md seeds the next run.)",
-                confirm_label="Restart (y)",
-                cancel_label="Keep session (n)",
-            )
-        )
-        if restart:
-            self.restart_session()
+        await self._harvest_ctl.run()
 
     @work(group=AGENT)
     async def _switch_model_worker(self, name: str) -> None:
