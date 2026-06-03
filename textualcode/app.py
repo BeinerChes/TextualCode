@@ -55,9 +55,13 @@ Powered by the **Claude Agent SDK**. Type a message and press **Enter**.
 
 
 def _task_key(message) -> str:
-    """Card key for a Task* message: composite of task_id + tool_use_id, so
-    sub-agents separate if EITHER identifier differs."""
-    return f"{getattr(message, 'task_id', '?')}:{getattr(message, 'tool_use_id', '') or ''}"
+    """Card key for a start/progress message: task_id + description.
+
+    Workflows share one task_id but vary the description per sub-agent (the
+    agent's label), so this gives one card per sub-agent. Real tasks have a
+    unique task_id and a stable description → one card.
+    """
+    return f"{getattr(message, 'task_id', '?')}:{getattr(message, 'description', '') or ''}"
 
 
 class TextualCodeApp(App):
@@ -303,7 +307,8 @@ class TextualCodeApp(App):
             return
         if isinstance(message, TaskNotificationMessage):
             self._log_task(message)
-            await self._task_panel.finish(_task_key(message), message.status, message.summary)
+            # One notification ends the whole task → finish every card under it.
+            await self._task_panel.finish_task(message.task_id, message.status, message.summary)
             return
         await self._renderer.render(message)
         if isinstance(message, ResultMessage):
@@ -318,6 +323,7 @@ class TextualCodeApp(App):
                 f"{type(message).__name__} "
                 f"task_id={getattr(message, 'task_id', '?')} "
                 f"tool_use_id={getattr(message, 'tool_use_id', '')} "
+                f"usage={getattr(message, 'usage', None)} "
                 f"desc={getattr(message, 'description', getattr(message, 'summary', ''))!r}\n"
             )
             with (self._project_dir / "task-debug.log").open("a", encoding="utf-8") as fh:

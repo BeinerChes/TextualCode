@@ -235,9 +235,14 @@ class TaskPanel(VerticalScroll):
         card = await self._ensure(key, description)
         card.set_progress(description, usage)
 
-    async def finish(self, key: str, status: str, summary: str) -> None:
-        card = await self._ensure(key, summary or "(task)")
-        card.finish(status, summary)
+    async def finish_task(self, task_id: str, status: str, summary: str) -> None:
+        """Finish every card belonging to `task_id` (workflows emit one
+        notification for all their sub-agent cards)."""
+        matched = [c for k, c in self._cards.items() if k.split(":", 1)[0] == task_id]
+        if not matched:
+            matched = [await self._ensure(f"{task_id}:", summary or "(task)")]
+        for card in matched:
+            card.finish(status, summary)
 
 
 def tool_preview(block: ToolUseBlock, keys: tuple[str, ...]) -> str:

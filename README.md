@@ -168,11 +168,14 @@ This is **free** (just consuming messages the SDK already sends). Architecture
 note: the pump owns *all* incoming messages; `send_to_agent` only `submit()`s
 the prompt and the pump renders the response + updates stats on `ResultMessage`.
 
-Cards are keyed by `task_id:tool_use_id` (composite — so parallel sub-agents
-separate if *either* id differs), and `finish`/`progress` lazily create a card
-if their event arrives before `start` (out-of-order safety). Set
-`TEXTUALCODE_DEBUG_TASKS=1` to append every `Task*` message's raw ids to
-`task-debug.log` — useful for seeing exactly what a workflow streams.
+Cards are keyed by `task_id:description`. A **workflow** shares one `task_id`
+but varies the `description` per sub-agent (the agent's label), so you get one
+card per sub-agent; a **real task** has a unique `task_id` + stable description →
+one card. A single `TaskNotificationMessage` ends the whole task, so
+`finish_task()` marks **every** card under that `task_id` complete.
+`progress`/`finish` lazily create a card if their event arrives before `start`
+(out-of-order safety). Set `TEXTUALCODE_DEBUG_TASKS=1` to append every `Task*`
+message's ids + `usage` to `task-debug.log`.
 
 ## Notes
 
