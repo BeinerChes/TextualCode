@@ -32,6 +32,7 @@ from .errors import report_error
 from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
 from .harvest_controller import HarvestController
 from .model_controller import ModelController
+from .session_controller import SessionController
 from .tools_controller import ToolsController
 from .quit_guard import QuitGuard
 from .status import StatusPresenter, StatsView
@@ -88,6 +89,7 @@ class TextualCodeApp(App):
         self._model_ctl = ModelController(self)
         self._tools_ctl = ToolsController(self)
         self._harvest_ctl = HarvestController(self)
+        self._session = SessionController(self)
         self._quit = QuitGuard(self)
         # True only while a real agent turn is in flight (submit → ResultMessage).
         # Distinguishes an interruptible turn from a /harvest, which also animates
@@ -217,51 +219,11 @@ class TextualCodeApp(App):
     # -------------------------------------------------------------- workers --
     @work(exclusive=True, group=CONNECT)
     async def connect_agent(self) -> None:
-        try:
-            await self._agent.connect()
-            self._model_ctl.refresh_models()
-            self._status.set_phase()
-            self.read_agent_stream()  # start reading the message stream
-        except Exception as exc:  # noqa: BLE001 - surface startup failures
-            self._status.set_phase("offline")
-            await report_error(
-                self._conversation, None, exc,
-                message=(
-                    f"> **Could not start the agent.** {type(exc).__name__}: {exc}\n>\n"
-                    "> Make sure the Claude Code CLI is installed and logged in."
-                ),
-            )
-
-    def _abandon_turn(self) -> None:
-        """Reset turn UI when a reconnect/restart abandons an in-flight turn (bug #1)."""
-        self._agent_turn_active = False
-        self._thinking.stop()
-        self._renderer.last_usage = None
-        self._renderer.last_cost = None
-        self._renderer.last_model_usage = None
-
-    async def _reconnect_and_rebind(self) -> None:
-        """Abandon any in-flight turn, cancel the old pump, reconnect, start a fresh pump."""
-        self._abandon_turn()
-        self.workers.cancel_group(self, PUMP)   # sdk-03: stop the old pump before tearing down its client
-        await self._agent.reconnect()
-        self.read_agent_stream()
+        await self._session.connect()
 
     @work(exclusive=True, group=CONNECT)
     async def reconnect_agent(self) -> None:
-        tools = self._agent.tools
-        desc = "all" if tools is None else ("none" if not tools else f"{len(tools)} selected")
-        self._status.set_phase("reconnecting…")
-        try:
-            await self._reconnect_and_rebind()
-            self._status.set_phase()
-            await self._conversation.add_markdown(
-                f"> ↻ Reconnected · system tools: **{desc}** "
-                "(new session — conversation reset)."
-            )
-        except Exception as exc:  # noqa: BLE001 - surface reconnect failures
-            self._status.set_phase("offline")
-            await report_error(self._conversation, "Reconnect failed:", exc)
+        await self._session.reconnect()
 
     @work(exclusive=True, group=CONNECT)
     async def restart_session(self) -> None:
@@ -271,20 +233,7 @@ class TextualCodeApp(App):
         Also clears the local transcript and cached context fill so the next
         harvest reflects only the new session. The on-screen log is untouched.
         """
-        self._status.set_phase("restarting…")
-        try:
-            await self._reconnect_and_rebind()
-            self._transcript.clear()
-            self._last_context = None
-            self._stats_view.render()
-            self._status.set_phase()
-            await self._conversation.add_markdown(
-                "> ↻ **Session restarted** — context window cleared. The agent "
-                "starts fresh; reference `state.md` to restore where we left off."
-            )
-        except Exception as exc:  # noqa: BLE001 - surface restart failures
-            self._status.set_phase("offline")
-            await report_error(self._conversation, "Restart failed:", exc)
+        await self._session.restart()
 
     @work(exclusive=True, group=PUMP)
     async def read_agent_stream(self) -> None:
