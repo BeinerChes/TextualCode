@@ -59,9 +59,14 @@ class StatsView:
         self._app = app
 
     def render(self) -> None:
-        """Push current app state to the stats panel."""
+        """Push current app state to the stats panel.
+
+        Uses ``display_stats`` (committed totals + the in-flight turn's live
+        token preview) so tokens / cache hit rate update mid-turn. Equals the
+        committed stats between turns, so all callers can use it unconditionally.
+        """
         self._app._stats_panel.show(
-            self._app._stats,
+            self._app._accountant.display_stats,
             self._app._model_label,
             self._app._last_context,
         )

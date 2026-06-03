@@ -71,6 +71,7 @@ class MessageDispatcher:
         debug_log: TaskDebugLog,
         accrue_subagent_tokens: Callable,
         on_turn_complete: Callable,
+        on_stream_progress: Callable | None = None,
     ) -> None:
         self._renderer = renderer
         self._transcript = transcript
@@ -78,6 +79,7 @@ class MessageDispatcher:
         self._debug_log = debug_log
         self._accrue_subagent_tokens = accrue_subagent_tokens
         self._on_turn_complete = on_turn_complete
+        self._on_stream_progress = on_stream_progress
 
     async def handle(self, message) -> None:
         """Dispatch a single SDK message to the right UI collaborator(s)."""
@@ -101,5 +103,9 @@ class MessageDispatcher:
         if isinstance(message, AssistantMessage):
             self._transcript.add_assistant(message)
         await self._renderer.render(message)
+        if isinstance(message, AssistantMessage) and self._on_stream_progress:
+            # Live stats: feed each streamed step's usage to the panel so tokens
+            # update mid-turn instead of only when the ResultMessage lands.
+            self._on_stream_progress(message)
         if isinstance(message, ResultMessage):
             self._on_turn_complete()

@@ -23,6 +23,8 @@ from typing import Iterable
 
 import anyio
 from textual import work
+
+from . import __version__
 from textual.app import App, ComposeResult, SystemCommand
 from textual.reactive import reactive
 from textual.containers import Horizontal, Vertical
@@ -39,11 +41,22 @@ from .config import (
     Settings,
 )
 from .errors import report_error
-from .groups import AGENT, CONNECT, HARVEST, INTERRUPT, PUMP, STATS, TOOLS_UI
+from .groups import (
+    AGENT,
+    COMMIT,
+    CONNECT,
+    HARVEST,
+    INTERRUPT,
+    PUMP,
+    REVIEW,
+    STATS,
+    TOOLS_UI,
+)
 from .harvest_controller import HarvestController
 from .model_controller import ModelController
 from .session_controller import SessionController
 from .tools_controller import ToolsController
+from .workspace_controller import WorkspaceController
 from .quit_guard import QuitGuard
 from .status import StatusPresenter, StatsView
 from .modal_bridge import ModalBridge
@@ -53,19 +66,31 @@ from .screens import (
     ModelSelector,
     ToolSelector,
 )
-from .widgets import ConversationView, PromptInput, StatsPanel, TaskPanel, ThinkingBar
+from .widgets import (
+    ConversationView,
+    PromptInput,
+    StatsPanel,
+    TaskPanel,
+    ThinkingBar,
+    WorkspacePanel,
+)
 
-WELCOME = """\
-# TextualCode
+WELCOME = f"""\
+```
+████████╗ ██████╗ ██████╗ ██████╗ ███████╗
+╚══██╔══╝██╔════╝██╔═══██╗██╔══██╗██╔════╝
+   ██║   ██║     ██║   ██║██║  ██║█████╗
+   ██║   ██║     ██║   ██║██║  ██║██╔══╝
+   ██║   ╚██████╗╚██████╔╝██████╔╝███████╗
+   ╚═╝    ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝  v{__version__}
+```
 
-Powered by the **Claude Agent SDK**. Type a message and press **Enter**.
+Powered by the **Claude Agent SDK** — uses your Claude Code login (Pro/Max or `ANTHROPIC_API_KEY`).
 
-- Uses your Claude Code login (Pro/Max subscription or `ANTHROPIC_API_KEY`).
 - Tool calls prompt an **approve/deny** dialog (a / d).
-- `/model` pick model · `/tools` pick tools · `/stats` panel
+- `/model` pick model · `/tools` pick tools · `/stats` panel · `/harvest` map session
 - Click **model** or **system tools** in the stats panel to change them.
 - Settings persist per project in `.textualcode.json`.
-- Press **Ctrl+C** to quit.
 """
 
 
@@ -74,6 +99,7 @@ class TextualCodeApp(App):
     BINDINGS = [
         ("ctrl+c", "request_quit", "Quit"),
         ("ctrl+t", "toggle_stats", "Stats"),
+        ("ctrl+g", "toggle_workspace", "Workspace"),
         ("escape", "interrupt", "Interrupt"),
     ]
 
@@ -105,6 +131,7 @@ class TextualCodeApp(App):
         self._model_ctl = ModelController(self)
         self._tools_ctl = ToolsController(self)
         self._harvest_ctl = HarvestController(self)
+        self._workspace_ctl = WorkspaceController(self)
         self._session = SessionController(self)
         self._quit = QuitGuard(self)
         # True only while a real agent turn is in flight (submit → ResultMessage).
@@ -125,12 +152,13 @@ class TextualCodeApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="body"):
+            yield WorkspacePanel(self._project_dir, id="workspace")
             yield ConversationView(id="conversation")
             with Vertical(id="sidebar"):
                 yield StatsPanel(id="stats")
                 yield TaskPanel(id="tasks")
         yield ThinkingBar(id="thinking")
-        yield PromptInput(placeholder="Ask anything… (or drop a file)", id="prompt")
+        yield PromptInput(id="prompt")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -139,6 +167,7 @@ class TextualCodeApp(App):
         self._conversation = self.query_one(ConversationView)
         self._stats_panel = self.query_one(StatsPanel)
         self._task_panel = self.query_one(TaskPanel)
+        self._workspace = self.query_one(WorkspacePanel)
         self._thinking = self.query_one(ThinkingBar)
         self._stats_view.render()
         self._renderer = MessageRenderer(self._conversation, self._settings)
@@ -149,6 +178,7 @@ class TextualCodeApp(App):
             debug_log=TaskDebugLog(self._project_dir),
             on_turn_complete=self._on_turn_complete,
             accrue_subagent_tokens=self._accountant.accrue_subagent_tokens,
+            on_stream_progress=self._on_stream_progress,
         )
         self._commands.register("model", self._model_ctl.apply)
         self._commands.register("stats", self._toggle_stats_command)
@@ -180,6 +210,44 @@ class TextualCodeApp(App):
 
     def action_toggle_stats(self) -> None:
         self._stats_panel.display = not self._stats_panel.display
+
+    def action_toggle_workspace(self) -> None:
+        """Ctrl+G: show/hide the left workspace panel (Files/Diff tabs).
+
+        On-demand refresh: recompute the diff each time the panel is revealed
+        so it's current without any background polling. Hidden by default
+        (CSS ``display: none``)."""
+        showing = not self._workspace.display
+        self._workspace.display = showing
+        if showing:
+            self._workspace.refresh_diff()
+        else:
+            # Don't leave the conversation/sidebar hidden behind a closed panel.
+            self._workspace.expanded = False
+
+    def on_workspace_panel_expand_toggled(
+        self, message: WorkspacePanel.ExpandToggled
+    ) -> None:
+        """Blow the workspace up to fill the tab (or restore it).
+
+        When expanded, hide the conversation and sidebar so the panel (now
+        ``width: 1fr`` via its ``.expanded`` class) takes the whole body row.
+        """
+        visible = not message.expanded
+        self._conversation.display = visible
+        self.query_one("#sidebar").display = visible
+
+    def on_workspace_panel_review_requested(
+        self, message: WorkspacePanel.ReviewRequested
+    ) -> None:
+        """Review button: run a code-review subagent over the working-tree diff."""
+        self.review_diff()
+
+    def on_workspace_panel_commit_requested(
+        self, message: WorkspacePanel.CommitRequested
+    ) -> None:
+        """Commit button: draft a message with Haiku, stage all, and commit."""
+        self.commit_diff()
 
     async def _toggle_stats_command(self, arg: str) -> None:
         self.action_toggle_stats()
@@ -300,6 +368,18 @@ class TextualCodeApp(App):
             self._agent_turn_active = False
             await report_error(self._conversation, "Message stream error", exc)
 
+    def _on_stream_progress(self, message) -> None:
+        """Update the stats panel mid-turn from a streamed assistant step.
+
+        Only main-agent steps (parent_tool_use_id is None) carry the turn's own
+        usage on this stream; subagent steps never reach it. The live tokens are
+        a display-only preview — the authoritative total is committed when the
+        ResultMessage arrives (see _on_turn_complete)."""
+        if getattr(message, "parent_tool_use_id", None) is not None:
+            return
+        self._accountant.accrue_live_usage(getattr(message, "usage", None))
+        self._stats_view.render()
+
     def _on_turn_complete(self) -> None:
         self._agent_turn_active = False
         self._thinking.stop()
@@ -313,6 +393,9 @@ class TextualCodeApp(App):
         self._renderer.last_cost = None
         self._renderer.last_model_usage = None
         self._status.set_phase()
+        # Render now so the authoritative committed totals replace the live
+        # preview immediately; refresh_context re-renders once context lands.
+        self._stats_view.render()
         self.refresh_context()
 
     @work(exclusive=True, group=STATS)
@@ -388,6 +471,16 @@ class TextualCodeApp(App):
         `.claude/lessons/`; the live conversation session is untouched.
         """
         await self._harvest_ctl.run()
+
+    @work(exclusive=True, group=REVIEW)
+    async def review_diff(self) -> None:
+        """Run the workspace Review action (isolated review subagent)."""
+        await self._workspace_ctl.review()
+
+    @work(exclusive=True, group=COMMIT)
+    async def commit_diff(self) -> None:
+        """Run the workspace Commit action (Haiku draft + git commit)."""
+        await self._workspace_ctl.commit()
 
     @work(group=AGENT)
     async def _switch_model_worker(self, name: str) -> None:

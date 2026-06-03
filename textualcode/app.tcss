@@ -2,6 +2,78 @@
     height: 1fr;
 }
 
+/* Left workspace panel (Files/Diff tabs). Hidden by default; Ctrl+G toggles
+   `display` from Python. Wider than the stats sidebar so diffs stay readable;
+   #conversation (width: 1fr) reflows around it. */
+#workspace {
+    display: none;
+    width: 54;
+    height: 1fr;
+    border: round $primary 40%;
+    background: $surface;
+}
+
+/* Full-tab-size mode (⛶ button): take the whole body row. The app hides
+   #conversation and #sidebar so nothing competes for the width. */
+#workspace.expanded {
+    width: 1fr;
+}
+
+/* Top action bar: Review / Commit stubs + the full-size toggle. */
+#workspace-actions {
+    height: auto;
+    padding: 0 1;
+}
+
+#workspace-actions Button {
+    min-width: 6;
+    height: 3;
+    margin: 0 1 0 0;
+}
+
+#workspace TabbedContent {
+    height: 1fr;
+}
+
+#diff-scroll {
+    height: 1fr;
+    padding: 0 1;
+}
+
+/* Summary header above the per-file cards: "N files changed  +X −Y". */
+#diff-summary {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#diff-files {
+    height: auto;
+}
+
+/* One collapsible card per changed file. Tighten Textual's default
+   Collapsible chrome so the file list reads as a compact, scannable stack. */
+.diff-file {
+    height: auto;
+    padding: 0;
+    border-top: none;
+    background: transparent;
+}
+
+.diff-file > CollapsibleTitle {
+    width: 1fr;
+    color: $text;
+    text-style: bold;
+}
+
+.diff-file Contents {
+    padding: 0 0 1 2;
+}
+
+.diff-file-body {
+    height: auto;
+}
+
 #conversation {
     width: 1fr;
     padding: 1 2;

@@ -36,13 +36,13 @@ class HarvestController:
         )
         # Cold-starting an isolated Haiku client takes 15-30s with no streamed
         # output; show the animated bar so the harvest doesn't look frozen.
-        self._app._thinking.start(label="Harvesting")
+        self._app._thinking.start(label="Harvesting", key="harvest")
         try:
             result = await Harvester(model="haiku").run(
                 self._app._transcript.render()
             )
         except Exception as exc:  # noqa: BLE001 - keep the UI alive on errors
-            self._app._thinking.stop()
+            self._app._thinking.stop(key="harvest")
             await report_error(
                 self._app._conversation, "Harvest failed:", exc
             )
@@ -50,14 +50,14 @@ class HarvestController:
         try:
             paths = write_harvest(self._app._project_dir, result)
         except Exception as exc:  # noqa: BLE001 - report write failures cleanly
-            self._app._thinking.stop()
+            self._app._thinking.stop(key="harvest")
             await report_error(
                 self._app._conversation,
                 "Could not write harvest files:",
                 exc,
             )
             return
-        self._app._thinking.stop()
+        self._app._thinking.stop(key="harvest")
         cost = f" · ${result.cost:.4f}" if result.cost else ""
         added = len(paths.new_lessons)
         lessons_note = f", +{added} lesson(s)" if added else ""
