@@ -9,6 +9,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     Message,
     ResultMessage,
+    ServerToolUseBlock,
     TextBlock,
     ToolUseBlock,
 )
@@ -54,8 +55,11 @@ class MessageRenderer:
             if isinstance(block, TextBlock):
                 self._tool_group = None  # agent spoke: close the current tool run
                 await self._view.add_message("agent", block.text)
-            elif isinstance(block, ToolUseBlock):
-                if block.name == "AskUserQuestion":
+            elif isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
+                # AskUserQuestion only appears on client-side ToolUseBlock; server
+                # tools (ServerToolUseBlock) never carry that name, so this check
+                # is a no-op for them and existing behavior is fully preserved.
+                if isinstance(block, ToolUseBlock) and block.name == "AskUserQuestion":
                     self._tool_group = None  # shown as a form, breaks the run
                     continue  # shown as an interactive form (QuestionForm), not a card
                 if self._tool_group is None:
