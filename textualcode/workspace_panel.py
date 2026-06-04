@@ -21,13 +21,13 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pygments.util import ClassNotFound
 from rich.syntax import Syntax
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.content import Content
+from textual.markup import escape
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -84,7 +84,7 @@ class WorkspacePanel(Vertical):
     class CommitRequested(Message):
         """Posted when the user presses the Commit button."""
 
-    def __init__(self, cwd: Path, **kwargs) -> None:
+    def __init__(self, cwd: Path, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self._cwd = cwd
 
@@ -137,13 +137,18 @@ class WorkspacePanel(Vertical):
         summary = self.query_one("#diff-summary", Static)
         files_box = self.query_one("#diff-files", Vertical)
         summary.update(Text("Loading diff…", style="dim italic"))
+        # git runs off the UI loop; the batch context must NOT wrap this await.
         result = await asyncio.to_thread(gitinfo.workspace_diff, self._cwd)
 
-        await files_box.remove_children()
+        # Wrap the three UI mutations in files_box.batch() (textual 8.2.7
+        # Widget.batch — async CM that holds the widget lock + app.batch_update)
+        # so Textual performs a single atomic repaint instead of three.
         summary_text, cards = self._build(result)
-        summary.update(summary_text)
-        if cards:
-            await files_box.mount_all(cards)
+        async with files_box.batch():
+            await files_box.remove_children()
+            summary.update(summary_text)
+            if cards:
+                await files_box.mount_all(cards)
 
     # -- rendering ----------------------------------------------------------
     # NOTE: do NOT name this `_render` — that shadows Widget._render and breaks
@@ -171,11 +176,12 @@ class WorkspacePanel(Vertical):
         files = result.files
         cards = [self._file_card(f) for f in files]
         if result.error:
-            # Escape stderr before it hits the markup parser: a literal "[" in a
-            # git error would otherwise be read as markup (or raise MarkupError),
-            # defeating this panel's never-error promise. _title() escapes too.
+            # Escape stderr before it hits the markup parser using the canonical
+            # Textual escaper (textual.markup.escape) so that brackets and
+            # backslashes in git output are treated as literal characters, never
+            # as markup tags, preserving the panel's never-error promise.
             cards.append(
-                Static(Text.from_markup(f"[red]git: {_escape(result.error)}[/]"))
+                Static(Content.from_markup(f"[red]git: {escape(result.error)}[/]"))
             )
 
         if not files:
@@ -187,8 +193,11 @@ class WorkspacePanel(Vertical):
                 cards,
             )
 
-        added = sum(f.added for f in files if not f.is_untracked)
-        removed = sum(f.removed for f in files if not f.is_untracked)
+        added = removed = 0
+        for f in files:
+            if not f.is_untracked:
+                added += f.added
+                removed += f.removed
         n = len(files)
         parts = [f"[bold]{n} file{'s' if n != 1 else ''} changed[/]"]
         if added:
@@ -200,6 +209,11 @@ class WorkspacePanel(Vertical):
     @classmethod
     def _file_card(cls, f: gitinfo.FileDiff) -> Collapsible:
         """A collapsible card for one changed file."""
+        # title= is annotated str but receives Content; this works because
+        # CollapsibleTitle.validate_label calls Content.from_text() which
+        # accepts an existing Content object unchanged.  If Textual ever
+        # tightens the str annotation to reject Content objects, switch to
+        # title._text or keep a str fallback here.
         return Collapsible(
             cls._file_body(f),
             title=cls._title(f),
@@ -220,7 +234,7 @@ class WorkspacePanel(Vertical):
                 bits.append(f"[red]−{f.removed}[/]")
             count = " ".join(bits)
         return Content.from_markup(
-            f"[{colour}]{glyph}[/] {_escape(f.path)}  {count}".rstrip()
+            f"[{colour}]{glyph}[/] {escape(f.path)}  {count}".rstrip()
         )
 
     @staticmethod
@@ -228,23 +242,14 @@ class WorkspacePanel(Vertical):
         if not f.body.strip():
             return Static(Text("(no preview)", style="dim italic"),
                           classes="diff-file-body")
-        try:
-            renderable = Syntax(
-                f.body,
-                f.lexer,
-                theme="ansi_dark",
-                word_wrap=False,
-                background_color="default",
-            )
-        except ClassNotFound:
-            # Unknown lexer for an untracked preview — fall back to plain text.
-            renderable = Syntax(
-                f.body, "text", theme="ansi_dark",
-                word_wrap=False, background_color="default",
-            )
+        # Syntax.__init__ (rich 15.0.0) never raises ClassNotFound — the lexer
+        # is resolved lazily in the .lexer property, which catches ClassNotFound
+        # internally and falls back to the default plain-text lexer.  Build once.
+        renderable = Syntax(
+            f.body,
+            f.lexer,
+            theme="ansi_dark",
+            word_wrap=False,
+            background_color="default",
+        )
         return Static(renderable, classes="diff-file-body")
-
-
-def _escape(text: str) -> str:
-    """Escape Content markup so paths with brackets render literally."""
-    return text.replace("\\", "\\\\").replace("[", "\\[")

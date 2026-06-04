@@ -33,6 +33,8 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [verify-undocumented-apis-against-source.md](verify-undocumented-apis-against-source.md) — When relying on undocumented internal APIs, verify behavior against the installed source code directly rather than public documentation, to prevent depending on unstable implementation details.
 - [dev-reviewer-workflow-for-large-refactors.md](dev-reviewer-workflow-for-large-refactors.md) — Use parameterized dev↔reviewer loops for refactors: dev implements against explicit scope, reviewer web-verifies claims and pushes back hard, then independent gate verifies imports/greps/diffs before commit; catches out-of-scope creep and drift from plan.
 - [verify-widget-apis-against-installed-source.md](verify-widget-apis-against-installed-source.md) — Before relying on a framework widget API, inspect the actual installed source code—not from memory—to confirm signatures, defaults, and behavior match your assumptions.
+- [preserve-metadata-in-batch-commits.md](preserve-metadata-in-batch-commits.md) — When committing batch review/fix results, use pathspec or explicit file staging to include only reviewed code changes and never commit session metadata files (state, lessons, transcripts) which are harvester-owned.
+- [instrument-before-hypothesizing.md](instrument-before-hypothesizing.md) — Before suspecting an SDK bug or API mismatch, instrument the call chain with logging, check git history for recent changes, measure actual call paths, and verify expected behavior per the documented API and code flow; never guess at distant causes without evidence.
 
 ## SDK Configuration
 
@@ -62,6 +64,8 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [decouple-content-render-from-selection-widget.md](decouple-content-render-from-selection-widget.md) — When a selectable widget (RadioButton, OptionList) truncates multi-line text, render content in composable Static/Label containers and manage selection separately; this allows text wrapping independent of the selection widget's constraints.
 - [use-content-markup-for-styled-widget-titles.md](use-content-markup-for-styled-widget-titles.md) — Pass styled Content objects (via Content.from_text with markup) as widget titles to render colored badges and metadata inline, rather than relying on plain string concatenation.
 - [collapsible-over-monolithic-for-grouped-content.md](collapsible-over-monolithic-for-grouped-content.md) — For grouped, hierarchical content (e.g., per-file diffs), use per-item Collapsible widgets instead of monolithic Markdown to enable independent expand/collapse and avoid re-rendering the entire view on refresh.
+- [avoid-heavy-widget-subtrees-static-content.md](avoid-heavy-widget-subtrees-static-content.md) — For static rendered content in Textual, use Static(RichMarkdown) or Static(Syntax) instead of Textual's Markdown/Code widgets to collapse widget subtrees (~18× reduction per message), preventing scroll relayout jank; tradeoff is loss of interactivity (links, copy buttons).
+- [batch-ui-mutations-coalesce-repaints.md](batch-ui-mutations-coalesce-repaints.md) — Wrap multiple sequential widget mutations (remove + mount + refresh) in async with widget.batch() to coalesce into one atomic repaint, preventing visible flicker and redundant layout passes.
 
 ## Architecture
 
@@ -172,6 +176,13 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Security
 
 - [scope-commit-to-reviewed-files.md](scope-commit-to-reviewed-files.md) — When an LLM drafts a commit message based on a truncated diff snapshot, stage only the files the model actually reviewed via git pathspec, not git add -A, to prevent unreviewed secrets and post-snapshot changes from being committed with incorrect descriptions.
+- [always-sanitize-model-controlled-filenames.md](always-sanitize-model-controlled-filenames.md) — Always apply path-sanitization (e.g., _slugify or is_relative_to confinement) to any model/user-controlled data before using it in Path() filesystem operations to prevent CWE-22 arbitrary file writes.
+- [quarantine-untrusted-input-via-sentinel-fence.md](quarantine-untrusted-input-via-sentinel-fence.md) — Wrap untrusted input (diffs, transcripts, user data) in a per-run random sentinel fence and issue a prompt directive that fenced content is data never instructions, to mitigate prompt-injection attacks in isolated-client patterns.
+- [fail-closed-permission-handlers.md](fail-closed-permission-handlers.md) — Permission/authorization callbacks that cannot resolve a decision must return Deny (fail-closed), not Allow (fail-open), to prevent unintended privilege escalation when handlers are misconfigured or missing.
+- [resource-cap-isolation-clients.md](resource-cap-isolation-clients.md) — Isolated client patterns (one-shot LLM invocations with untrusted input) must set max_turns, max_budget_usd, and disallowed_tools=[Bash,Write,Edit,NotebookEdit] to bound OWASP-LLM10 uncapped consumption and restrict dangerous actions.
+- [check-is_error-gate-writes.md](check-is_error-gate-writes.md) — When adding resource caps or error signals to agent responses, ensure consuming code actually checks is_error before writes/commits/mutations, otherwise the cap is silent and the critical path remains open.
+- [dont-interpolate-raw-fields-into-logs.md](dont-interpolate-raw-fields-into-logs.md) — Never interpolate raw user/model-controlled fields (task IDs, commands, paths) directly into logs or markup; always repr() or escape to prevent log-injection (CWE-117) and accidental markup rendering.
+- [escape-untrusted-markup-input.md](escape-untrusted-markup-input.md) — Escape model-controlled or external tool output with rich.markup.escape before passing to markup-accepting widgets (e.g., Collapsible titles) to prevent CWE-150 markup injection and MarkupError crashes.
 
 ## Async
 
@@ -192,3 +203,21 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## PowerShell
 
 - [powershell-5-stderr-try-catch.md](powershell-5-stderr-try-catch.md) — In PowerShell 5.1 scripts with $ErrorActionPreference = 'Stop', native command stderr cannot be suppressed by output redirects alone (*> $null); wrap in try { ... } catch { } instead, to prevent informational stderr from becoming terminating errors in user-facing installers.
+
+## Typing
+
+- [type-all-sdk-callback-parameters.md](type-all-sdk-callback-parameters.md) — Permission callbacks and tool handlers in SDK usage must declare full parameter types exported by the SDK (e.g., CanUseTool, ToolPermissionContext), not bare/implicit, so type checkers verify the callback contract.
+
+## Idiom
+
+- [use-async-with-sdk-connections.md](use-async-with-sdk-connections.md) — Always open Claude SDK ClaudeSDKClient and resource connections via async with + receive_response() idiom, not manual connect/try-finally/disconnect, to ensure cleanup and match canonical SDK patterns.
+
+## Performance
+
+- [offload-blocking-io-from-event-loop.md](offload-blocking-io-from-event-loop.md) — Never open/read/write files synchronously inside an async event-loop thread; use async file I/O or offload to thread pool via asyncio.to_thread() to prevent event-loop starvation.
+- [avoid-heavy-reparsing-static-content.md](avoid-heavy-reparsing-static-content.md) — Don't re-instantiate heavy parsing widgets like Markdown per item for static content; parse once with Static(Syntax(...)) to avoid quadratic re-parsing costs.
+- [benchmark-before-architecture-change.md](benchmark-before-architecture-change.md) — When evaluating competing architectural fixes (caching vs pagination vs virtualization), build a minimal standalone benchmark with representative data and measure actual costs (widget count, relayout latency, mount time) before committing to a rewrite; metrics beat intuition and prevent wrong-path w
+
+## Logic
+
+- [check-isinstance-for-separate-dataclasses.md](check-isinstance-for-separate-dataclasses.md) — When dispatching on dataclass type, explicitly check isinstance for all separate dataclasses (not subclasses) to avoid silently dropping code paths in isinstance-based conditionals.
