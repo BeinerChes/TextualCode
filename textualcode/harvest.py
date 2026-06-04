@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from dataclasses import dataclass, field
 
 from claude_agent_sdk import (
@@ -25,6 +26,19 @@ from claude_agent_sdk import (
 )
 
 from .prompts import EXTRACTION_PROMPT
+
+# Defense-in-depth: explicitly block mutating tools even though tools=[].
+# Verified: ClaudeAgentOptions.disallowed_tools exists in claude-agent-sdk 0.2.88
+# (types.py line 1666).
+_DISALLOWED_TOOLS = ["Bash", "Write", "Edit", "NotebookEdit"]
+
+# Conservative resource caps for an unattended one-shot sub-agent.
+# max_turns: a JSON extraction is a single response; 2 gives one retry.
+# max_budget_usd: hard ceiling for a cheap Haiku one-shot call.
+# Verified: both fields exist on ClaudeAgentOptions in 0.2.88 (types.py
+# lines 1653 and 1659).
+_MAX_TURNS = 2
+_MAX_BUDGET_USD = 0.10
 
 
 def _slugify(text: str) -> str:
@@ -54,6 +68,7 @@ class HarvestResult:
     raw: str = ""
     usage: dict | None = None
     cost: float | None = None
+    is_error: bool = False  # populated from ResultMessage.is_error (0.2.88 types.py L1151)
 
 
 def _as_list(value) -> list[str]:
@@ -83,18 +98,28 @@ class Harvester:
         self._model = model
 
     async def run(self, transcript: str) -> HarvestResult:
+        # Per-run random sentinel: wrapping the untrusted transcript prevents
+        # embedded directives from escaping the data boundary and becoming
+        # instructions.
+        sentinel = secrets.token_hex(16)
         options = ClaudeAgentOptions(
             system_prompt=EXTRACTION_PROMPT,
             model=self._model,
             tools=[],                # no tools — it only emits JSON
+            disallowed_tools=_DISALLOWED_TOOLS,
             strict_mcp_config=True,
             setting_sources=[],      # fully isolated, like the main session
+            max_turns=_MAX_TURNS,
+            max_budget_usd=_MAX_BUDGET_USD,
         )
         parts: list[str] = []
         usage: dict | None = None
         cost: float | None = None
+        is_error: bool = False
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(transcript)
+            await client.query(
+                f"<untrusted-transcript-{sentinel}>\n{transcript}\n</untrusted-transcript-{sentinel}>"
+            )
             async for message in client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
@@ -103,10 +128,13 @@ class Harvester:
                 elif isinstance(message, ResultMessage):
                     usage = message.usage
                     cost = message.total_cost_usd
-        return self._parse("".join(parts), usage, cost)
+                    is_error = message.is_error
+        return self._parse("".join(parts), usage, cost, is_error)
 
     @staticmethod
-    def _parse(raw: str, usage: dict | None, cost: float | None) -> HarvestResult:
+    def _parse(
+        raw: str, usage: dict | None, cost: float | None, is_error: bool = False
+    ) -> HarvestResult:
         data = _extract_json(raw) or {}
         lessons: list[Lesson] = []
         for item in data.get("lessons", []) or []:
@@ -133,4 +161,5 @@ class Harvester:
             raw=raw,
             usage=usage,
             cost=cost,
+            is_error=is_error,
         )

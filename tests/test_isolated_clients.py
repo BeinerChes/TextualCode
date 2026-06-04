@@ -759,12 +759,14 @@ async def test_harvester_run_calls_receive_response(harvester_fake_client):
 
 @pytest.mark.asyncio
 async def test_harvester_run_query_sends_transcript(harvester_fake_client):
-    """Harvester.run() sends the transcript as the query text."""
+    """Harvester.run() sends the transcript embedded inside the query text."""
     harvester = Harvester()
     transcript = "session transcript content"
     await harvester.run(transcript)
     assert len(harvester_fake_client.query_calls) == 1
-    assert harvester_fake_client.query_calls[0] == transcript
+    # The transcript is wrapped in a sentinel fence; it must appear verbatim
+    # inside (not equal to) the query string.
+    assert transcript in harvester_fake_client.query_calls[0]
 
 
 @pytest.mark.asyncio
@@ -831,3 +833,280 @@ async def test_harvester_run_malformed_json_no_crash(monkeypatch):
     assert isinstance(result, HarvestResult)
     assert result.goal == ""
     assert result.lessons == []
+
+
+# ---------------------------------------------------------------------------
+# NEW HARDENING TESTS — committer.run sentinel fence, disallowed_tools,
+# resource caps, is_error propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_committer_run_diff_in_matching_sentinel_fence(committer_fake_client):
+    """The query wraps diff text in <untrusted-diff-TOKEN>…</untrusted-diff-TOKEN>
+    where the open and close tags carry the same TOKEN value."""
+    committer = Committer()
+    diff = "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new"
+    await committer.run(diff)
+    query = committer_fake_client.query_calls[0]
+    # Extract all sentinel tag names (open and close) from the query
+    import re
+    open_tags = re.findall(r"<(untrusted-diff-[0-9a-f]+)>", query)
+    close_tags = re.findall(r"</(untrusted-diff-[0-9a-f]+)>", query)
+    assert open_tags, "No opening <untrusted-diff-TOKEN> tag found in query"
+    assert close_tags, "No closing </untrusted-diff-TOKEN> tag found in query"
+    assert open_tags == close_tags, (
+        f"Open token(s) {open_tags!r} do not match close token(s) {close_tags!r}"
+    )
+    # The diff content must appear between the tags
+    assert diff in query
+
+
+@pytest.mark.asyncio
+async def test_committer_run_disallowed_tools_include_bash_write_edit(committer_fake_client):
+    """Committer passes disallowed_tools containing Bash, Write, and Edit."""
+    committer = Committer()
+    await committer.run("diff")
+    opts = committer_fake_client.constructed_options[0]
+    for tool in ("Bash", "Write", "Edit"):
+        assert tool in opts.disallowed_tools, (
+            f"Expected {tool!r} in disallowed_tools, got {opts.disallowed_tools!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_committer_run_max_turns_set(committer_fake_client):
+    """Committer passes max_turns (> 0) to ClaudeAgentOptions."""
+    committer = Committer()
+    await committer.run("diff")
+    opts = committer_fake_client.constructed_options[0]
+    assert opts.max_turns is not None, "max_turns should be set on ClaudeAgentOptions"
+    assert opts.max_turns > 0
+
+
+@pytest.mark.asyncio
+async def test_committer_run_max_budget_usd_set(committer_fake_client):
+    """Committer passes max_budget_usd (> 0) to ClaudeAgentOptions."""
+    committer = Committer()
+    await committer.run("diff")
+    opts = committer_fake_client.constructed_options[0]
+    assert opts.max_budget_usd is not None, "max_budget_usd should be set on ClaudeAgentOptions"
+    assert opts.max_budget_usd > 0
+
+
+@pytest.mark.asyncio
+async def test_committer_run_is_error_false_from_result_message(committer_fake_client):
+    """CommitMessage.is_error is False when ResultMessage.is_error is False."""
+    committer = Committer()
+    result = await committer.run("diff")
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_committer_run_is_error_true_from_result_message(monkeypatch):
+    """CommitMessage.is_error is True when ResultMessage.is_error is True."""
+
+    class _ErrorClient:
+        constructed_options: list = []
+        query_calls: list = []
+
+        def __init__(self, options=None, **_):
+            _ErrorClient.constructed_options.append(options)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def query(self, text: str, **_):
+            _ErrorClient.query_calls.append(text)
+
+        async def receive_response(self):
+            yield AssistantMessage(
+                content=[TextBlock(text="")],
+                model="claude-haiku-4-5",
+            )
+            yield ResultMessage(
+                subtype="error",
+                duration_ms=100,
+                duration_api_ms=100,
+                is_error=True,
+                num_turns=1,
+                session_id="fake-session",
+                total_cost_usd=None,
+                usage=None,
+            )
+
+    _ErrorClient.constructed_options = []
+    _ErrorClient.query_calls = []
+    monkeypatch.setattr("textualcode.committer.ClaudeSDKClient", _ErrorClient)
+
+    committer = Committer()
+    result = await committer.run("diff")
+    assert result.is_error is True
+
+
+# ---------------------------------------------------------------------------
+# NEW HARDENING TESTS — harvest.run sentinel fence, disallowed_tools,
+# resource caps, is_error propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_transcript_in_matching_sentinel_fence(harvester_fake_client):
+    """The query wraps the transcript in <untrusted-transcript-TOKEN>…
+    </untrusted-transcript-TOKEN> with matching open/close TOKEN values."""
+    harvester = Harvester()
+    transcript = "Agent did a lot of things today."
+    await harvester.run(transcript)
+    query = harvester_fake_client.query_calls[0]
+    import re
+    open_tags = re.findall(r"<(untrusted-transcript-[0-9a-f]+)>", query)
+    close_tags = re.findall(r"</(untrusted-transcript-[0-9a-f]+)>", query)
+    assert open_tags, "No opening <untrusted-transcript-TOKEN> tag found in query"
+    assert close_tags, "No closing </untrusted-transcript-TOKEN> tag found in query"
+    assert open_tags == close_tags, (
+        f"Open token(s) {open_tags!r} do not match close token(s) {close_tags!r}"
+    )
+    assert transcript in query
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_disallowed_tools_include_bash_write_edit(harvester_fake_client):
+    """Harvester passes disallowed_tools containing Bash, Write, and Edit."""
+    harvester = Harvester()
+    await harvester.run("transcript")
+    opts = harvester_fake_client.constructed_options[0]
+    for tool in ("Bash", "Write", "Edit"):
+        assert tool in opts.disallowed_tools, (
+            f"Expected {tool!r} in disallowed_tools, got {opts.disallowed_tools!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_max_turns_set(harvester_fake_client):
+    """Harvester passes max_turns (> 0) to ClaudeAgentOptions."""
+    harvester = Harvester()
+    await harvester.run("transcript")
+    opts = harvester_fake_client.constructed_options[0]
+    assert opts.max_turns is not None, "max_turns should be set on ClaudeAgentOptions"
+    assert opts.max_turns > 0
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_max_budget_usd_set(harvester_fake_client):
+    """Harvester passes max_budget_usd (> 0) to ClaudeAgentOptions."""
+    harvester = Harvester()
+    await harvester.run("transcript")
+    opts = harvester_fake_client.constructed_options[0]
+    assert opts.max_budget_usd is not None, "max_budget_usd should be set on ClaudeAgentOptions"
+    assert opts.max_budget_usd > 0
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_is_error_false_from_result_message(harvester_fake_client):
+    """HarvestResult.is_error is False when ResultMessage.is_error is False."""
+    harvester = Harvester()
+    result = await harvester.run("transcript")
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_is_error_true_from_result_message(monkeypatch):
+    """HarvestResult.is_error is True when ResultMessage.is_error is True."""
+
+    class _ErrorHarvestClient:
+        constructed_options: list = []
+        query_calls: list = []
+
+        def __init__(self, options=None, **_):
+            _ErrorHarvestClient.constructed_options.append(options)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def query(self, text: str, **_):
+            _ErrorHarvestClient.query_calls.append(text)
+
+        async def receive_response(self):
+            yield AssistantMessage(
+                content=[TextBlock(text="")],
+                model="claude-haiku-4-5",
+            )
+            yield ResultMessage(
+                subtype="error",
+                duration_ms=100,
+                duration_api_ms=100,
+                is_error=True,
+                num_turns=1,
+                session_id="fake-session",
+                total_cost_usd=None,
+                usage=None,
+            )
+
+    _ErrorHarvestClient.constructed_options = []
+    _ErrorHarvestClient.query_calls = []
+    monkeypatch.setattr("textualcode.harvest.ClaudeSDKClient", _ErrorHarvestClient)
+
+    harvester = Harvester()
+    result = await harvester.run("transcript")
+    assert result.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_harvester_run_json_parsed_end_to_end_through_fence(harvester_fake_client):
+    """JSON parsing works correctly even though the transcript is wrapped in a fence.
+    The fence is in the QUERY, not the response — response is the raw JSON from the
+    fake client — so _parse still receives valid JSON."""
+    harvester = Harvester()
+    result = await harvester.run("some transcript")
+    # Verify full end-to-end JSON parse from the fake _HARVEST_JSON response
+    assert result.goal == "Improve test coverage"
+    assert result.satisfied == "yes"
+    assert len(result.lessons) == 1
+    assert result.lessons[0].slug == "write-tests-early"
+    assert result.is_error is False
+
+
+# ---------------------------------------------------------------------------
+# NEW HARDENING TESTS — prompts contain untrusted-data directive
+# ---------------------------------------------------------------------------
+
+
+def test_commit_prompt_contains_untrusted_data_directive():
+    """COMMIT_PROMPT includes the untrusted input boundary directive."""
+    from textualcode.prompts import COMMIT_PROMPT
+    # Key phrases that anchor the prompt-injection defense
+    assert "untrusted" in COMMIT_PROMPT.lower(), (
+        "COMMIT_PROMPT must describe untrusted-input boundary"
+    )
+    assert "untrusted-diff-TOKEN" in COMMIT_PROMPT, (
+        "COMMIT_PROMPT must reference the sentinel fence tag name"
+    )
+    assert "DATA" in COMMIT_PROMPT, (
+        "COMMIT_PROMPT must label fenced content as DATA, not instructions"
+    )
+    assert "NEVER instructions" in COMMIT_PROMPT or "never instructions" in COMMIT_PROMPT.lower(), (
+        "COMMIT_PROMPT must explicitly say fenced content is not instructions"
+    )
+
+
+def test_extraction_prompt_contains_untrusted_data_directive():
+    """EXTRACTION_PROMPT includes the untrusted input boundary directive."""
+    from textualcode.prompts import EXTRACTION_PROMPT
+    assert "untrusted" in EXTRACTION_PROMPT.lower(), (
+        "EXTRACTION_PROMPT must describe untrusted-input boundary"
+    )
+    assert "untrusted-transcript-TOKEN" in EXTRACTION_PROMPT, (
+        "EXTRACTION_PROMPT must reference the sentinel fence tag name"
+    )
+    assert "DATA" in EXTRACTION_PROMPT, (
+        "EXTRACTION_PROMPT must label fenced content as DATA, not instructions"
+    )
+    assert "NEVER instructions" in EXTRACTION_PROMPT or "never instructions" in EXTRACTION_PROMPT.lower(), (
+        "EXTRACTION_PROMPT must explicitly say fenced content is not instructions"
+    )
