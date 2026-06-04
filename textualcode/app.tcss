@@ -77,6 +77,14 @@
 #conversation {
     width: 1fr;
     padding: 1 2;
+    /* Always reserve space for the vertical scrollbar. With the default
+       `auto`, the scrollbar appears only once content overflows and the
+       messages reflow narrower — but during rapid mounting/auto-scroll there's
+       a frame where the scrollbar is drawn before the messages have re-wrapped,
+       so their last characters get painted under it. `stable` keeps the content
+       width constant whether or not the scrollbar is visible, closing that gap
+       (and preventing the layout from jumping when it appears). */
+    scrollbar-gutter: stable;
 }
 
 .msg-row {
@@ -90,10 +98,11 @@
 }
 
 /* The gutter is fixed-width; the content must take the remaining space.
-   Without this the Markdown sizes to its content's natural width inside the
-   Horizontal row, so long lines overflow to the right and get clipped under
-   the scrollbar instead of wrapping. */
-.msg-row > Markdown {
+   Without this the content sizes to its natural width inside the Horizontal
+   row, so long lines overflow to the right and get clipped under the scrollbar
+   instead of wrapping. Messages are now `SelectableStatic` (not the `Markdown`
+   widget) since the render-perf migration, so this targets that type. */
+.msg-row > SelectableStatic {
     width: 1fr;
 }
 
@@ -186,6 +195,22 @@ Markdown {
     padding: 0 2;
 }
 
+#thinking #thinking-dots {
+    width: 10;
+    height: 1;
+    min-height: 1;
+    content-align: left middle;
+    color: orange;
+    background: transparent;
+}
+
+#thinking #thinking-label {
+    width: 1fr;
+    height: 1;
+    content-align: left middle;
+    padding-left: 1;
+}
+
 #prompt {
     dock: bottom;
     margin: 1 2;
@@ -219,6 +244,19 @@ PermissionDialog {
 
 #dlg-hint {
     margin-top: 1;
+}
+
+/* Four buttons must share the 72-wide dialog; the default Button min-width of
+   16 (+ a 2-cell `tall` border) overflows. Size each to its label instead and
+   center the row. */
+#dlg-buttons {
+    height: auto;
+    align-horizontal: center;
+}
+
+#dlg-buttons Button {
+    min-width: 0;
+    margin: 0 1 0 0;
 }
 
 #tool-list, #model-set, #effort-set {

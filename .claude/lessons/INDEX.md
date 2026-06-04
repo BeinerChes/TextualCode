@@ -35,6 +35,8 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [verify-widget-apis-against-installed-source.md](verify-widget-apis-against-installed-source.md) — Before relying on a framework widget API, inspect the actual installed source code—not from memory—to confirm signatures, defaults, and behavior match your assumptions.
 - [preserve-metadata-in-batch-commits.md](preserve-metadata-in-batch-commits.md) — When committing batch review/fix results, use pathspec or explicit file staging to include only reviewed code changes and never commit session metadata files (state, lessons, transcripts) which are harvester-owned.
 - [instrument-before-hypothesizing.md](instrument-before-hypothesizing.md) — Before suspecting an SDK bug or API mismatch, instrument the call chain with logging, check git history for recent changes, measure actual call paths, and verify expected behavior per the documented API and code flow; never guess at distant causes without evidence.
+- [inspect-real-installed-api-before-widget-swap.md](inspect-real-installed-api-before-widget-swap.md) — Before adopting a third-party widget replacement, inspect its actual installed source code to confirm presence of required features (text overlay, counters, concurrency primitives); do not assume capabilities from documentation or memory.
+- [windows-cp1252-utf8-file-encoding.md](windows-cp1252-utf8-file-encoding.md) — On Windows, invoke the venv Python interpreter with explicit UTF-8 encoding when reading project files with non-ASCII content to avoid cp1252 decoding errors.
 
 ## SDK Configuration
 
@@ -55,6 +57,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 
 - [diagnose-sdk-shapes-empirically.md](diagnose-sdk-shapes-empirically.md) — When SDK data shapes or formats are uncertain, run diagnostics against the live SDK with actual app connect options before designing; format mismatches (model ID suffixes, field presence, token accounting) only surface in practice, not in docs.
 - [instrument-before-hypothesize.md](instrument-before-hypothesize.md) — For opaque input handling (terminal events, user actions), add logging to capture actual event type and content before forming theories; let observed data drive diagnosis instead of guessing at cause.
+- [headless-pass-live-fail-suspects-wiring.md](headless-pass-live-fail-suspects-wiring.md) — When identical operations pass in headless synthetic tests but fail in live terminal, the code logic is likely sound; suspect environment wiring (CSS selectors, event propagation, gating flags) or broken render-path triggers (missing refresh calls, compositor gaps).
 
 ## UI
 
@@ -66,6 +69,11 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [collapsible-over-monolithic-for-grouped-content.md](collapsible-over-monolithic-for-grouped-content.md) — For grouped, hierarchical content (e.g., per-file diffs), use per-item Collapsible widgets instead of monolithic Markdown to enable independent expand/collapse and avoid re-rendering the entire view on refresh.
 - [avoid-heavy-widget-subtrees-static-content.md](avoid-heavy-widget-subtrees-static-content.md) — For static rendered content in Textual, use Static(RichMarkdown) or Static(Syntax) instead of Textual's Markdown/Code widgets to collapse widget subtrees (~18× reduction per message), preventing scroll relayout jank; tradeoff is loss of interactivity (links, copy buttons).
 - [batch-ui-mutations-coalesce-repaints.md](batch-ui-mutations-coalesce-repaints.md) — Wrap multiple sequential widget mutations (remove + mount + refresh) in async with widget.batch() to coalesce into one atomic repaint, preventing visible flicker and redundant layout passes.
+- [override-get-selection-for-rich-renderables.md](override-get-selection-for-rich-renderables.md) — Override Static.get_selection() to extract text from _render_cache.lines when wrapping Rich renderables, since Textual only auto-extracts from Text/Content objects, not RichVisual.
+- [paint-visual-feedback-in-custom-visuals.md](paint-visual-feedback-in-custom-visuals.md) — Explicitly paint visual feedback (selection highlights, hover states, etc.) in custom visual components, or state changes will appear broken to users even though the state updates internally.
+- [preserve-widget-public-api-during-refactor.md](preserve-widget-public-api-during-refactor.md) — When refactoring a widget's internal visual implementation, preserve its public method signatures (start/stop, add_tokens, show_notice) to avoid forcing cascading changes in dependent code; constrain refactoring to the internal component tree and internal logic.
+- [prefer-rich-pretty-textual-widget.md](prefer-rich-pretty-textual-widget.md) — Use Textual's Pretty widget to render Python objects with syntax coloring and structure-aware indentation instead of json.dumps() + Static, preventing hard-to-read walls of escaped JSON text.
+- [preserve-id-selector-on-widget-replacement.md](preserve-id-selector-on-widget-replacement.md) — When replacing a widget that has ID-based CSS rules, preserve the ID on the replacement widget so existing layout constraints (height, scroll, margin) continue to apply.
 
 ## Architecture
 
@@ -96,6 +104,9 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Testing
 
 - [test-interrupted-state-separately.md](test-interrupted-state-separately.md) — Behavior under interruption (Esc, cancel) often differs from normal flow; verify guards intended for normal paths don't wrongly suppress post-interrupt side effects (e.g., ResultMessage handling, dialog dismissal).
+- [test-interactive-ui-live-before-commit.md](test-interactive-ui-live-before-commit.md) — Test text selection, drag interactions, and mouse-driven UI features in the live running app before committing widget migrations, as headless tests cannot fully exercise interactive paths.
+- [test-full-render-path-not-state-alone.md](test-full-render-path-not-state-alone.md) — For rendering/UI tests, assert the complete path (state change → refresh signal → render invoked → visual output changed), not just intermediate state, to catch broken re-render triggers (refresh not called, compositor skipped, or broken render logic).
+- [explicit-utf8-encoding-in-headless-tests.md](explicit-utf8-encoding-in-headless-tests.md) — In headless terminal-application tests, explicitly set UTF-8 output encoding to prevent Windows cp1252 fallbacks that suppress or hide non-ASCII render assertions; verify encoding setup before asserting on glyph output.
 
 ## Risk Management
 
@@ -147,6 +158,7 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 
 - [pull-version-from-metadata-not-hardcoded.md](pull-version-from-metadata-not-hardcoded.md) — Reference __version__ from module metadata instead of hardcoding version strings in UI display, preventing version skew between displayed and actual package version.
 - [empty-setting-sources-for-isolated-clients.md](empty-setting-sources-for-isolated-clients.md) — Set setting_sources=[] on isolated SDK clients to prevent inherited environment configuration from conflicting with the isolated client's intended scope.
+- [merge-preserve-on-settings-write.md](merge-preserve-on-settings-write.md) — When writing permission updates to settings.json files, read the existing JSON, update the target keys in place, and write back the merged result instead of overwriting, to prevent silent data loss of unrelated config keys (allow rules, voice settings, etc.) and handle missing files gracefully.
 
 ## UI Threading
 
@@ -172,6 +184,9 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 ## Permissions
 
 - [use-bypass-permissions-for-readonly-subagents.md](use-bypass-permissions-for-readonly-subagents.md) — Set permission_mode='bypassPermissions' on read-only subagents to allow autonomous tool use without blocking on user confirmation prompts for each operation.
+- [auto-mode-persists-to-usersettings-only.md](auto-mode-persists-to-usersettings-only.md) — Persist Claude Agent SDK auto permission mode only to ~/.claude/settings.json (userSettings), never to .claude/settings.json (projectSettings) or .claude/settings.local.json (localSettings), because the CLI silently ignores defaultMode: auto in project and local scopes (2.1.142+), producing a no-op 
+- [model-gate-for-unavailable-permission-modes.md](model-gate-for-unavailable-permission-modes.md) — For permission modes with model or account gates (e.g., auto mode requires Opus 4.6+/Sonnet 4.6 or Team/Enterprise enablement), implement a client-side model-version heuristic gate before offering the mode, because set_permission_mode() control responses do not confirm active mode and unavailable mo
+- [broad-allow-rules-undermine-auto-mode.md](broad-allow-rules-undermine-auto-mode.md) — Clean up overly broad allow rules (Bash(*), PowerShell(*), Agent wildcards) before relying on auto permission mode's classifier, because entering auto mode drops broad rules temporarily but users may not expect classifier overhead for pre-approved commands; keep allow rules narrowly scoped.
 
 ## Security
 
@@ -217,7 +232,32 @@ Cross-session lessons harvested from coding sessions. Each line is an imperative
 - [offload-blocking-io-from-event-loop.md](offload-blocking-io-from-event-loop.md) — Never open/read/write files synchronously inside an async event-loop thread; use async file I/O or offload to thread pool via asyncio.to_thread() to prevent event-loop starvation.
 - [avoid-heavy-reparsing-static-content.md](avoid-heavy-reparsing-static-content.md) — Don't re-instantiate heavy parsing widgets like Markdown per item for static content; parse once with Static(Syntax(...)) to avoid quadratic re-parsing costs.
 - [benchmark-before-architecture-change.md](benchmark-before-architecture-change.md) — When evaluating competing architectural fixes (caching vs pagination vs virtualization), build a minimal standalone benchmark with representative data and measure actual costs (widget count, relayout latency, mount time) before committing to a rewrite; metrics beat intuition and prevent wrong-path w
+- [surgical-fix-over-revert-for-perf.md](surgical-fix-over-revert-for-perf.md) — Implement surgical method overrides in subclasses to fix regressions from performance optimizations, rather than reverting, to preserve widget-count or latency gains.
 
 ## Logic
 
 - [check-isinstance-for-separate-dataclasses.md](check-isinstance-for-separate-dataclasses.md) — When dispatching on dataclass type, explicitly check isinstance for all separate dataclasses (not subclasses) to avoid silently dropping code paths in isinstance-based conditionals.
+
+## Rendering
+
+- [inject-coordinate-metadata-through-render-delegates.md](inject-coordinate-metadata-through-render-delegates.md) — Explicitly inject coordinate metadata (offsets, positions) when delegating rendering to a lower-level abstraction, or features like selection will silently degrade from partial-range to whole-widget because the compositor can't map mouse positions to text coordinates.
+
+## UI / Rich Text Rendering
+
+- [apply-selection-as-post-style-not-base-style.md](apply-selection-as-post-style-not-base-style.md) — Apply Rich text selection highlighting via post_style overlay (e.g., Segment(..., post_style=sel_style)), not as a base style, to prevent the selected text's own foreground/background attributes from overriding the highlight.
+
+## UI / Color Styling
+
+- [blend-transparent-theme-against-opaque-base.md](blend-transparent-theme-against-opaque-base.md) — When applying themed colors with transparency (e.g., primary@50%), blend them against the opaque widget style (visual_style + selection_style).rich_style() to produce a readable solid color; calling .rich_style on the transparent theme alone yields an invisible result.
+
+## Research
+
+- [never-guess-api-check-installed-source.md](never-guess-api-check-installed-source.md) — For undocumented or version-specific APIs, verify exact behavior against the installed library source code, not documentation or intuition, to avoid silent API mismatches.
+
+## Textual / Keybindings
+
+- [guard-binding-overrides-with-branching.md](guard-binding-overrides-with-branching.md) — An explicit key binding (e.g., ctrl+c → request_quit) completely overrides framework defaults (e.g., copy-to-clipboard); guard overridden bindings with conditional logic to preserve the default behavior when contextually appropriate.
+
+## SDK
+
+- [sdk-control-protocol-no-state-readback.md](sdk-control-protocol-no-state-readback.md) — Do not assume the Claude Agent SDK's control protocol carries active state in responses; set_permission_mode() confirms success/error only, so gate your behavior on inputs you control (model version, user choice) rather than SDK introspection.

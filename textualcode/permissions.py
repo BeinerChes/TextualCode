@@ -23,6 +23,7 @@ class Decision:
 
     allow: bool
     remember: bool = False  # remember this call's similarity key for the session
+    auto: bool = False      # switch the whole session into auto permission mode
 
 
 def similarity_key(tool_name: str, tool_input: dict) -> tuple[str, str]:

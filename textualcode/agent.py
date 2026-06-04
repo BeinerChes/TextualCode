@@ -7,8 +7,10 @@ decides how to render them.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import (
@@ -21,7 +23,7 @@ from claude_agent_sdk import (
     ToolPermissionContext,
 )
 
-from .config import Settings
+from .config import Settings, model_supports_auto
 from .permissions import Decision, PermissionPolicy
 
 log = logging.getLogger(__name__)
@@ -30,6 +32,43 @@ log = logging.getLogger(__name__)
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[Decision]]
 # Renders an AskUserQuestion form; returns {question_text: answer(s)} or None.
 QuestionHandler = Callable[[list[dict[str, Any]]], Awaitable[dict[str, Any] | None]]
+# Surfaces a transient message to the user: (message, severity). Severity is one
+# of Textual's levels ("information" / "warning" / "error").
+Notifier = Callable[[str, str], None]
+
+# Auto permission mode is only honoured as a persisted default from USER
+# settings; the CLI (>= 2.1.142) ignores defaultMode:"auto" in project/local
+# settings (verified against code.claude.com/docs/en/permission-modes, 2026-06).
+_USER_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+
+
+def _write_user_default_mode(mode: str) -> bool:
+    """Persist ``permissions.defaultMode = mode`` to ~/.claude/settings.json.
+
+    Merges into the existing file (preserving every other key) and creates it if
+    absent. Best-effort: returns False (and logs) on any I/O or parse error so a
+    failed write never breaks the live session.
+    """
+    try:
+        data: dict[str, Any] = {}
+        if _USER_SETTINGS_PATH.exists():
+            loaded = json.loads(_USER_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        perms = data.get("permissions")
+        if not isinstance(perms, dict):
+            perms = {}
+            data["permissions"] = perms
+        perms["defaultMode"] = mode
+        _USER_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _USER_SETTINGS_PATH.write_text(
+            json.dumps(data, indent=2) + "\n", encoding="utf-8"
+        )
+        return True
+    except (OSError, ValueError):
+        log.warning("could not persist defaultMode=%r to user settings", mode,
+                    exc_info=True)
+        return False
 
 
 class AgentSession:
@@ -41,6 +80,7 @@ class AgentSession:
         permission_handler: PermissionHandler | None = None,
         *,
         question_handler: QuestionHandler | None = None,
+        notifier: Notifier | None = None,
         model: str | None = None,
         tools: list[str] | None = None,
         effort: str | None = None,
@@ -50,6 +90,7 @@ class AgentSession:
         self._settings = settings
         self._permission_handler = permission_handler
         self._question_handler = question_handler
+        self._notifier = notifier
         self._policy = PermissionPolicy()
         self._client: ClaudeSDKClient | None = None
         self._models: list[dict[str, Any]] = []
@@ -239,11 +280,65 @@ class AgentSession:
         if self._permission_handler is None:
             return PermissionResultDeny(message="No permission handler configured.")
         decision = await self._permission_handler(tool_name, tool_input)
+        if decision.auto:
+            # User chose "Auto": flip the session into auto mode (or the
+            # acceptEdits fallback) and allow this call too. Future calls are
+            # then resolved by the mode, not this dialog.
+            await self._activate_auto_mode()
+            return PermissionResultAllow()
         if decision.remember:
             self._policy.remember(tool_name, tool_input)
         if decision.allow:
             return PermissionResultAllow()
         return PermissionResultDeny(message="Denied by user.")
+
+    def _notify(self, message: str, severity: str = "information") -> None:
+        """Surface a message to the user, if a notifier was wired (else no-op)."""
+        if self._notifier is None:
+            return
+        try:
+            self._notifier(message, severity)
+        except Exception:  # noqa: BLE001 - notification is best-effort
+            log.debug("notifier failed", exc_info=True)
+
+    async def _activate_auto_mode(self) -> str:
+        """Switch the live session toward auto mode and persist it as the default.
+
+        Persistence target is USER settings (~/.claude/settings.json) — the only
+        location the CLI honours `defaultMode:"auto"` from. For the *live*
+        session we apply "auto" only when the current model can plausibly run
+        the classifier; otherwise we fall back to "acceptEdits" (auto silently
+        stays `default` on an unsupported model, so degrading is the safe,
+        visible choice). Returns the mode actually applied this session.
+
+        `set_permission_mode` is verified against claude-agent-sdk==0.2.88
+        (client.py) — it sends a control request whose response carries no active
+        mode, so there is no live readback; we gate on the model instead.
+        """
+        persisted = _write_user_default_mode("auto")
+        applied = "auto" if model_supports_auto(self.model or "", self._models) \
+            else "acceptEdits"
+        try:
+            await self._require_client().set_permission_mode(applied)
+        except Exception:  # noqa: BLE001 - never break the turn on a mode switch
+            log.warning("set_permission_mode(%r) failed", applied, exc_info=True)
+            self._notify("Could not switch permission mode.", "error")
+            return "default"
+
+        saved = "" if persisted else " (couldn't save it as your default)"
+        if applied == "auto":
+            self._notify(
+                "Auto mode on — tool calls now run without prompts, checked by a "
+                f"safety classifier.{saved}",
+                "warning",
+            )
+        else:
+            self._notify(
+                "Auto mode needs Opus 4.6+/Sonnet 4.6; using acceptEdits "
+                f"(auto-approve edits) this session instead.{saved}",
+                "warning",
+            )
+        return applied
 
     async def _answer_question(self, tool_input: dict[str, Any]) -> PermissionResult:
         """Render Claude's AskUserQuestion and return the answers as the result.

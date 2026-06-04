@@ -6,6 +6,7 @@ Pure data and helpers — no I/O, no Textual, no SDK calls.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -66,6 +67,41 @@ def match_model(name: str, models: list[dict]) -> str:
         if query and query in haystack:
             return str(model["value"])
     return name
+
+
+def _resolve_model_text(model_value: str, models: list[dict]) -> str:
+    """The displayName+description for a model `value` (so a version is visible).
+
+    Matches the live server list by `value`; falls back to the raw value when no
+    entry matches (e.g. an unknown alias or "default" the server doesn't expose).
+    """
+    query = (model_value or "").strip().lower()
+    for model in models:
+        if str(model.get("value", "")).lower() == query:
+            return f"{model.get('displayName', '')} {model.get('description', '')}"
+    return model_value or ""
+
+
+def model_supports_auto(model_value: str, models: list[dict]) -> bool:
+    """Best-effort check whether a model can run the classifier-backed `auto`
+    permission mode.
+
+    Auto requires Opus 4.6+ / Sonnet 4.6 on the Anthropic API; Sonnet 4.5,
+    Opus 4.5, Haiku and claude-3 are unsupported (verified against
+    code.claude.com/docs/en/permission-modes, 2026-06). Deliberately
+    conservative: only returns False when the model is *clearly* too old.
+    Unknown aliases/ids/"default" are allowed through — the CLI silently keeps
+    `default` mode at runtime if the gate is unmet, and the caller degrades to
+    acceptEdits, so a false positive here is non-fatal.
+    """
+    text = _resolve_model_text(model_value, models).lower()
+    if "haiku" in text or "claude-3" in text or "claude 3" in text:
+        return False
+    match = re.search(r"(?:opus|sonnet)\D*(\d+)[.\-](\d+)", text)
+    if match:
+        return (int(match.group(1)), int(match.group(2))) >= (4, 6)
+    return True  # alias / default / unknown — rely on the runtime fallback
+
 
 # Conversation role markers (Rich markup, rendered in the message gutter).
 # ▲ = you (input goes up to the model), ▼ = agent (response comes down).

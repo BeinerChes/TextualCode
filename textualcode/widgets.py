@@ -17,6 +17,7 @@ from __future__ import annotations
 from .conversation import ConversationView
 from .formatting import _short
 from .prompt_input import PromptInput
+from .selectable_static import SelectableStatic
 from .stats_panel import StatsPanel
 from .task_cards import TaskCard, TaskPanel
 from .thinking_bar import ThinkingBar
@@ -26,6 +27,7 @@ from .workspace_panel import WorkspacePanel
 __all__ = [
     "ConversationView",
     "PromptInput",
+    "SelectableStatic",
     "StatsPanel",
     "TaskCard",
     "TaskPanel",

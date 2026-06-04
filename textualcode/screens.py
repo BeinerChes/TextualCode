@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 
 from rich.markup import escape
@@ -12,7 +11,14 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, RadioButton, RadioSet, SelectionList, Static
+from textual.widgets import (
+    Button,
+    Pretty,
+    RadioButton,
+    RadioSet,
+    SelectionList,
+    Static,
+)
 from textual.widgets.selection_list import Selection
 
 from .permissions import Decision
@@ -155,6 +161,7 @@ class PermissionDialog(ModalScreen[Decision]):
     BINDINGS = [
         ("a", "approve_once", "Approve once"),
         ("s", "approve_similar", "Approve similar"),
+        ("u", "auto", "Auto mode"),
         ("d", "deny", "Deny"),
         ("escape", "deny", "Deny"),
     ]
@@ -166,26 +173,27 @@ class PermissionDialog(ModalScreen[Decision]):
         self._similar_label = similar_label
 
     def compose(self) -> ComposeResult:
-        try:
-            body = json.dumps(self._tool_input, indent=2, ensure_ascii=False)
-        except (TypeError, ValueError):
-            body = str(self._tool_input)
         with Vertical(id="dialog"):
             yield Static(f"🔐 Allow [b]{self._tool_name}[/b] to run?", id="dlg-title")
-            yield Static(body, id="dlg-body", markup=False)
+            yield Pretty(self._tool_input, id="dlg-body")
             yield Static(
-                f'[dim]“Approve similar” allows {self._similar_label} this session.[/dim]',
+                f'[dim]“Approve similar” allows {self._similar_label} this session. '
+                "“Auto” hands the rest of the session to auto mode (no more "
+                "prompts; tool calls are classifier-checked) and saves it as your "
+                "default.[/dim]",
                 id="dlg-hint",
             )
             with Horizontal(id="dlg-buttons"):
                 yield Button("Approve once (a)", variant="success", id="once")
                 yield Button("Approve similar (s)", variant="warning", id="similar")
+                yield Button("Auto (u)", variant="primary", id="auto")
                 yield Button("Deny (d)", variant="error", id="deny")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         decisions = {
             "once": Decision(allow=True, remember=False),
             "similar": Decision(allow=True, remember=True),
+            "auto": Decision(allow=True, auto=True),
             "deny": Decision(allow=False),
         }
         self.dismiss(decisions[event.button.id])
@@ -195,6 +203,9 @@ class PermissionDialog(ModalScreen[Decision]):
 
     def action_approve_similar(self) -> None:
         self.dismiss(Decision(allow=True, remember=True))
+
+    def action_auto(self) -> None:
+        self.dismiss(Decision(allow=True, auto=True))
 
     def action_deny(self) -> None:
         self.dismiss(Decision(allow=False))

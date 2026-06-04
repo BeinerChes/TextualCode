@@ -27,6 +27,7 @@ from textual import work
 
 from . import __version__
 from textual.app import App, ComposeResult, SystemCommand
+from textual.dom import NoScreen
 from textual.reactive import reactive
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
@@ -122,6 +123,7 @@ class TextualCodeApp(App):
             self._settings,
             permission_handler=self._modal.ask_permission,
             question_handler=self._modal.ask_question,
+            notifier=lambda msg, severity: self.notify(msg, severity=severity),
             model=self._project.model,
             tools=self._project.tools,
             effort=self._project.effort,
@@ -200,12 +202,46 @@ class TextualCodeApp(App):
         self.connect_agent()
 
     def action_request_quit(self) -> None:
-        """Claude-Code-style quit: the first Ctrl+C arms a short confirm window
-        and shows a hint; a second Ctrl+C within the window actually exits.
+        """Ctrl+C. With text selected it acts as **copy**; otherwise it runs the
+        Claude-Code-style two-step quit.
 
-        This keeps a stray Ctrl+C (e.g. a terminal copy) from killing the app.
+        - If there is an active text selection, copy it to the clipboard and
+          stop — Ctrl+C does NOT arm quit (and a second Ctrl+C won't exit).
+          This restores the copy behaviour the old ``Markdown`` widget got for
+          free before it was replaced by ``SelectableStatic`` for perf, and
+          matches what a terminal does with a live selection.
+        - With nothing selected, the first Ctrl+C arms a short confirm window
+          and shows a hint; a second Ctrl+C within the window actually exits.
+          This keeps a stray Ctrl+C from killing the app.
+
+        Because Ctrl+C is bound to this action at the App level, it takes
+        precedence over Textual's built-in copy/quit handling, so the copy path
+        must be handled explicitly here.
         """
+        if self._copy_selection_to_clipboard():
+            return
         self._quit.request()
+
+    def _copy_selection_to_clipboard(self) -> bool:
+        """Copy the active text selection to the clipboard, if any.
+
+        Returns ``True`` when there was a selection (so Ctrl+C acted as copy and
+        the caller must not fall through to the quit flow), ``False`` otherwise.
+        The selection is cleared after copying so a subsequent Ctrl+C resumes
+        normal quit behaviour rather than copying the same text forever.
+        """
+        try:
+            selected = self.screen.get_selected_text()
+        except NoScreen:
+            return False
+        if not selected:
+            return False
+        self.copy_to_clipboard(selected)
+        self.clear_selection()
+        if not self._thinking.show_notice("[green]Copied to clipboard[/green]"):
+            # ThinkingBar is busy animating — fall back to a toast.
+            self.notify("Copied to clipboard", timeout=2.0)
+        return True
 
     def action_interrupt(self) -> None:
         """Esc: interrupt the in-flight turn, like Claude Code.
