@@ -79,11 +79,19 @@ def _write_lessons(lessons_dir: Path, index_path: Path, lessons: list[Lesson]) -
     sections = _parse_sections(body)
     known = _known_slugs(existing)
 
+    lessons_dir_resolved = lessons_dir.resolve()
     new_paths: list[Path] = []
     for lesson in lessons:
         if lesson.slug in known:
             continue
         lesson_path = lessons_dir / f"{lesson.slug}.md"
+        # Fix 1 (defense-in-depth sink): resolve the candidate path and confirm
+        # it stays inside lessons_dir.  _slugify at the source boundary should
+        # have stripped any traversal sequences already; this is a last-resort
+        # guard in case the slug somehow still resolves outside the directory.
+        # Path.is_relative_to is available from Python 3.9+.
+        if not lesson_path.resolve().is_relative_to(lessons_dir_resolved):
+            continue
         if not lesson_path.exists():
             lesson_path.write_text(_render_lesson(lesson), encoding="utf-8")
             new_paths.append(lesson_path)

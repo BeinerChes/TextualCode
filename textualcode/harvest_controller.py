@@ -47,6 +47,15 @@ class HarvestController:
                 self._app._conversation, "Harvest failed:", exc
             )
             return
+        # Fix 3: if the SDK reported an error (budget/turn cap, API failure),
+        # stop now — do not write partial state or show the success message.
+        if result.is_error:
+            self._app._thinking.stop(key="harvest")
+            await self._app._conversation.add_markdown(
+                "> ⚠ Harvest did not complete — the model returned an error "
+                "(budget cap, turn limit, or API failure). No files were written."
+            )
+            return
         try:
             paths = write_harvest(self._app._project_dir, result)
         except Exception as exc:  # noqa: BLE001 - report write failures cleanly

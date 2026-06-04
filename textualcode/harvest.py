@@ -71,6 +71,17 @@ class HarvestResult:
     is_error: bool = False  # populated from ResultMessage.is_error (0.2.88 types.py L1151)
 
 
+def _sanitize_line(text: str, max_len: int) -> str:
+    """Collapse embedded newlines/whitespace to single spaces and cap length.
+
+    Prevents model-controlled text from injecting markdown section headers or
+    bullet lines into INDEX.md when used as a single-line field (category, rule,
+    satisfied).
+    """
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    return collapsed[:max_len]
+
+
 def _as_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
@@ -139,13 +150,26 @@ class Harvester:
         lessons: list[Lesson] = []
         for item in data.get("lessons", []) or []:
             if isinstance(item, dict) and str(item.get("rule", "")).strip():
-                rule = str(item["rule"]).strip()
+                # Fix 2: sanitize single-line fields before use — collapse
+                # embedded newlines to spaces and cap length so model-controlled
+                # text cannot inject markdown section headers or bullet lines
+                # into INDEX.md (category used as '## {category}', rule as a
+                # list line).
+                rule = _sanitize_line(str(item.get("rule", "")), max_len=300)
+                if not rule:
+                    continue
+                # Fix 1 (source boundary): ALWAYS run the slug through _slugify
+                # so model-controlled path separators / traversal sequences like
+                # "../../../../foo" are stripped before the slug reaches the
+                # filesystem.  The raw model value is used ONLY as a fallback
+                # seed for _slugify; it is never used verbatim.
+                cand = _slugify(str(item.get("slug") or ""))
+                slug = cand if cand != "lesson" else _slugify(rule)
+                category = _sanitize_line(
+                    str(item.get("category") or "General") or "General", max_len=40
+                ) or "General"
                 lessons.append(
-                    Lesson(
-                        slug=str(item.get("slug") or "").strip() or _slugify(rule),
-                        category=str(item.get("category") or "General").strip() or "General",
-                        rule=rule,
-                    )
+                    Lesson(slug=slug, category=category, rule=rule)
                 )
         return HarvestResult(
             goal=str(data.get("goal", "")).strip(),
@@ -153,7 +177,7 @@ class Harvester:
             did=_as_list(data.get("did")),
             mistakes=_as_list(data.get("mistakes")),
             result=str(data.get("result", "")).strip(),
-            satisfied=str(data.get("satisfied", "unknown")).strip() or "unknown",
+            satisfied=_sanitize_line(str(data.get("satisfied", "unknown")), max_len=40) or "unknown",
             next=_as_list(data.get("next")),
             keywords=_as_list(data.get("keywords")),
             keyfiles=_as_list(data.get("keyfiles")),
