@@ -7,23 +7,29 @@ decides how to render them.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     Message,
+    PermissionResult,
     PermissionResultAllow,
     PermissionResultDeny,
+    ToolPermissionContext,
 )
 
 from .config import Settings
 from .permissions import Decision, PermissionPolicy
 
+log = logging.getLogger(__name__)
+
 # Asks the UI to approve a tool call and returns the user's Decision.
-PermissionHandler = Callable[[str, dict], Awaitable[Decision]]
+PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[Decision]]
 # Renders an AskUserQuestion form; returns {question_text: answer(s)} or None.
-QuestionHandler = Callable[[list[dict]], Awaitable[dict | None]]
+QuestionHandler = Callable[[list[dict[str, Any]]], Awaitable[dict[str, Any] | None]]
 
 
 class AgentSession:
@@ -46,9 +52,10 @@ class AgentSession:
         self._question_handler = question_handler
         self._policy = PermissionPolicy()
         self._client: ClaudeSDKClient | None = None
-        self._models: list[dict] = []
+        self._models: list[dict[str, Any]] = []
         self.model = model      # CLI value ("sonnet"/"haiku"/"default"/raw id) or None
-        self.tools = tools      # None = all built-ins; [] = none; subset = list
+        # tools tri-state: None = all built-in tools; [] = no tools; [names] = that subset
+        self.tools = tools
         self.effort = effort    # EffortLevel str, or "default"/None = let model decide
         # Per-project MCP trust gate. False → strict_mcp_config on → no ambient
         # MCP servers are loaded/spawned at connect (safe default).
@@ -84,9 +91,13 @@ class AgentSession:
             # SDK to inject CLAUDE.md as memory. Per the SDK's "what subagents
             # inherit" table, subagents pick up Project CLAUDE.md from this same
             # setting (Explore/Plan are the only built-ins that skip it).
-            # Trade-off: this also re-enables filesystem permissions.allow / hooks,
-            # so our can_use_tool dialog is no longer the *sole* gate — allow-rules
-            # in those settings can auto-approve tools before the dialog is asked.
+            # Security trade-off: loading these sources also activates any
+            # permissions.allow rules and hooks defined in user/project settings.
+            # Those rules run BEFORE our can_use_tool dialog and can auto-approve
+            # tool calls without user interaction. Users who place allow-all rules
+            # in their global settings will bypass this app's permission gate.
+            # The isolated subagents (committer/reviewer/harvest) use
+            # setting_sources=[] to opt out of this entirely.
             setting_sources=["user", "project"],
             can_use_tool=self._approve_tool,
         )
@@ -107,7 +118,7 @@ class AgentSession:
         """`"default"`/None both mean "omit effort and let the model decide"."""
         return None if effort in (None, "default") else effort
 
-    def available_models(self) -> list[dict]:
+    def available_models(self) -> list[dict[str, Any]]:
         """The model list reported by the connected CLI (value/displayName/desc)."""
         return self._models
 
@@ -145,16 +156,17 @@ class AgentSession:
         self.model = model
         await self._require_client().set_model(self._normalize_model(model))
 
-    async def context_usage(self) -> dict | None:
+    async def context_usage(self) -> dict[str, Any] | None:
         """Current context-window breakdown (the data behind `/context`)."""
         if self._client is None:
             return None
         try:
             return await self._client.get_context_usage()
         except Exception:  # noqa: BLE001 - degrade gracefully if unsupported
+            log.debug("get_context_usage failed", exc_info=True)
             return None
 
-    async def mcp_status(self) -> list[dict]:
+    async def mcp_status(self) -> list[dict[str, Any]]:
         """Live status of every configured MCP server.
 
         Each entry has name / status (connected|pending|failed|needs-auth|
@@ -167,6 +179,7 @@ class AgentSession:
         try:
             result = await self._client.get_mcp_status()
         except Exception:  # noqa: BLE001 - degrade gracefully if unsupported
+            log.debug("get_mcp_status failed", exc_info=True)
             return []
         return list(result.get("mcpServers", [])) if result else []
 
@@ -200,7 +213,7 @@ class AgentSession:
             try:
                 await self._client.toggle_mcp_server(name, False)
             except Exception:  # noqa: BLE001 - best effort; ignore unknown/failed names
-                pass
+                log.warning("toggle_mcp_server(%r, False) failed", name, exc_info=True)
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -212,14 +225,19 @@ class AgentSession:
             raise RuntimeError("Agent is not connected")
         return self._client
 
-    async def _approve_tool(self, tool_name, tool_input, context):
+    async def _approve_tool(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        _context: ToolPermissionContext,
+    ) -> PermissionResult:
         """Tiered policy: auto-allow safe/remembered calls, else ask the UI."""
         if tool_name == "AskUserQuestion":
             return await self._answer_question(tool_input)
         if self._policy.auto_allow(tool_name, tool_input):
             return PermissionResultAllow()
         if self._permission_handler is None:
-            return PermissionResultAllow()
+            return PermissionResultDeny(message="No permission handler configured.")
         decision = await self._permission_handler(tool_name, tool_input)
         if decision.remember:
             self._policy.remember(tool_name, tool_input)
@@ -227,7 +245,7 @@ class AgentSession:
             return PermissionResultAllow()
         return PermissionResultDeny(message="Denied by user.")
 
-    async def _answer_question(self, tool_input: dict):
+    async def _answer_question(self, tool_input: dict[str, Any]) -> PermissionResult:
         """Render Claude's AskUserQuestion and return the answers as the result.
 
         Answers go back via `updated_input`: {questions, answers} where answers
@@ -235,7 +253,7 @@ class AgentSession:
         """
         questions = tool_input.get("questions", [])
         if self._question_handler is None:
-            return PermissionResultAllow()  # no UI: let it proceed unanswered
+            return PermissionResultDeny(message="No question handler configured.")
         answers = await self._question_handler(questions)
         if answers is None:
             return PermissionResultDeny(message="User dismissed the question.")

@@ -90,14 +90,12 @@ class Harvester:
             strict_mcp_config=True,
             setting_sources=[],      # fully isolated, like the main session
         )
-        client = ClaudeSDKClient(options=options)
-        await client.connect()
         parts: list[str] = []
         usage: dict | None = None
         cost: float | None = None
-        try:
+        async with ClaudeSDKClient(options=options) as client:
             await client.query(transcript)
-            async for message in client.receive_messages():
+            async for message in client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -105,9 +103,6 @@ class Harvester:
                 elif isinstance(message, ResultMessage):
                     usage = message.usage
                     cost = message.total_cost_usd
-                    break
-        finally:
-            await client.disconnect()
         return self._parse("".join(parts), usage, cost)
 
     @staticmethod
